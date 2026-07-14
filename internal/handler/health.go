@@ -3,17 +3,15 @@
 //Handlers should be thin: they parse input, call into business logic, and format response
 //They should not contain business logic themselves
 
-package handler
+package handler //handler package holds functions that respond to invidual HTTP routes
 
 import (
 	"encoding/json"
 	"net/http"
 )
 
-//Health() handles GET /v1/healthcheck -> returns small JSON payload
-//every HTTP handler in Go receives a http.ResponseWRiter and *http.Request
-//ResponseWriter is an interface you write your response into, *Request is a struct I read the incoming request from
-//net/http package's whole model is: "give me a function with this signature, and I'll call it when a matching request comes in"
+//handler is any function with signature func(w http.ResponseWriter, r *http.Request)
+//Ii read the request from r, write the response into w, and the standard library handles all the TCP/http machinery around me
 func Health(w http.ResponseWriter, r *http.Request){
 	//anonymous struct -> stuct type defined and instantiated in one move
 	response := struct{

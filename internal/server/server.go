@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yourusername/budget-macro-optimizer/internal/handler"
+	"github.com/BenYang12/Macro-Max/internal/handler"
 )
 
 // New returns an *http.Server configured with our routes and sensible
