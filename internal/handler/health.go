@@ -10,18 +10,18 @@ import (
 	"net/http"
 )
 
-//handler is any function with signature func(w http.ResponseWriter, r *http.Request)
-//Ii read the request from r, write the response into w, and the standard library handles all the TCP/http machinery around me
-func Health(w http.ResponseWriter, r *http.Request){
+// handler is any function with signature func(w http.ResponseWriter, r *http.Request)
+// Ii read the request from r, write the response into w, and the standard library handles all the TCP/http machinery around me
+func Health(w http.ResponseWriter, r *http.Request) {
 	//anonymous struct -> stuct type defined and instantiated in one move
-	response := struct{
+	response := struct {
 		Status  string `json:"status"`
 		Version string `json:"version"`
 		//backtick-quoted string is struct tag -> metadata attached to the field, readable at runtime via reflection
 		//in json version, status and version become lowercased
 	}{
-		Status: "ok",
-		Version: "0.0.1", 
+		Status:  "ok",
+		Version: "0.0.1",
 	}
 
 	//w is an http.Responsewriter which is an interface that exposes three methods
@@ -31,6 +31,5 @@ func Health(w http.ResponseWriter, r *http.Request){
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response)
-
 
 }

@@ -18,12 +18,11 @@ import (
 // test can construct the server, poke at its Handler, and never open a port.
 func New(addr string) *http.Server {
 	// http.NewServeMux is the standard library's built-in HTTP router. As of
-	// Go 1.22 it supports method-based routing (e.g. "GET /v1/healthcheck"),
-	// which used to be the main reason people reached for third-party
-	// routers like chi. For now, the stdlib mux is enough. We'll switch to
-	// chi later, when we want features like middleware chains and URL
-	// parameter extraction, but there's no reason to add a dependency
-	// before we need one.
+	// Go 1.22 it supports method-based routing (e.g. "GET /v1/healthcheck")
+	// and URL parameter extraction (r.PathValue("id")), which used to be the
+	// main reasons people reached for third-party routers like chi. Decision:
+	// we're staying on the stdlib mux for this project — it covers everything
+	// this API needs, and middleware is just a function that wraps a handler.
 	mux := http.NewServeMux()
 
 	// Register the health check route. The "GET " prefix (with a space) is
