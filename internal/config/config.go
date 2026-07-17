@@ -67,7 +67,7 @@ func envOr(key, fallback string) string{
 // General pattern: Libraries return errors; only main can kill the process
 func LoadFromEnv() (Config, error){
 	cfg := Config{
-		Port: env0r("PORT", "4000"),
+		Port: envOr("PORT", "4000"),
 		// This default matches the credentials in docker-compose.yml.
 		// sslmode=disable is fine for localhost; production DSNs come from the environment and will require TLS.
 		DatabaseURL: envOr("DATABASE_URL", "postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=disable"),
@@ -89,10 +89,3 @@ func LoadFromEnv() (Config, error){
 	return cfg, nil
 
 }
-
-
-	
-
-
-	
-
