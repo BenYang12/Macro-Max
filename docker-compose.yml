@@ -1,0 +1,71 @@
+# docker-compose.yml — local development infrastructure.
+#
+# This file describes the SERVICES our app depends on (Postgres and Redis) so
+# that `make up` (i.e. `docker compose up -d`) gives every developer an
+# identical environment — no "works on my machine" Postgres version drift.
+#
+# Deliberate choice: the Go API itself is NOT a service here. During
+# development we run it on the host with `make run`, because a host process
+# restarts in ~1 second while a container rebuild takes much longer. The API
+# gets its own Dockerfile in Phase 7 when we prepare for deployment.
+#
+# Handy commands:
+#   docker compose up -d      start everything in the background (-d = detached)
+#   docker compose ps         see status + health of each service
+#   docker compose logs -f    tail the logs
+#   docker compose down       stop (data survives in the named volume)
+#   docker compose down -v    stop AND delete data volumes (fresh start)
+
+services:
+  postgres:
+    # Pin a major version. "postgres:16-alpine" = Postgres 16 on Alpine Linux
+    # (a tiny base image). Never use ":latest" for a database — an unplanned
+    # major-version upgrade can render your data directory unreadable.
+    image: postgres:16-alpine
+
+    # "host:container" — expose the container's Postgres port on localhost so
+    # the host-run Go API (and psql, and GUI tools) can reach it at
+    # localhost:5432. This must agree with config.go's default DATABASE_URL.
+    ports:
+      - "5432:5432"
+
+    # The official postgres image reads these on FIRST boot to create the
+    # initial user, password, and database. These credentials are for local
+    # dev only — real deployments inject real secrets via the environment.
+    environment:
+      POSTGRES_USER: macrocart
+      POSTGRES_PASSWORD: macrocart
+      POSTGRES_DB: macrocart
+
+    # A NAMED VOLUME persists the database files outside the container, so
+    # `docker compose down` + `up` keeps your data. Only `down -v` wipes it.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+    # The healthcheck lets other tooling ask "is Postgres actually ready?"
+    # rather than "is the container running?" — Postgres takes a moment to
+    # accept connections after the process starts. pg_isready is a small
+    # utility shipped with Postgres exactly for this.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U macrocart -d macrocart"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    # No volume: Redis is a CACHE for us. Losing it costs nothing but a few
+    # re-computed solves, so an empty Redis after restart is fine (and is a
+    # good test that nothing incorrectly treats the cache as durable storage).
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]  # replies "PONG" when ready
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+# Top-level declaration of the named volumes referenced above. Docker creates
+# and manages them; `docker volume ls` shows them.
+volumes:
+  pgdata:

@@ -1,0 +1,7 @@
+# Local planning notes — not part of the published repo
+docs/PLAN.md
+.claude
+
+
+# Local environment variables (real secrets live here; .env.example is committed)
+.env

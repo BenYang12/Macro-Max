@@ -20,6 +20,7 @@ import (
 // ONLY validate Port
 type Config struct{
 	// store as string, (":" + Port)
+	// capital name = public
 	Port string 
 
 	// Postgres connection string (e.g. postgres://user:password@host:5432/dbname?sslmode=disable)
@@ -40,6 +41,7 @@ type Config struct{
 // 3. Listen and ListenAndServe: I pass my router and network address to http.ListenAndServe() to start the server, which listens for requests and automatically handles each one in its own goroutine
 
 // Addr() is a method that returns the listen address for http.Server, e.g. ":4000".
+// value receiver -> method receives copy. read on small structs, everything else, pass in a pointer -> func (c *Config)
 func (c Config) Addr() string{
 	return ":" + c.Port
 }
