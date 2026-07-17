@@ -1,16 +1,10 @@
 // Package config centralizes all runtime configuration for the app.
-//
-// Why a whole package for this? Two reasons:
-//  1. One place to look. Every knob the app has (port, database, redis, and
-//     later: API keys, solver address) is declared in the Config struct below.
-//     No hunting through the codebase for stray os.Getenv calls.
-//  2. Testability. LoadFromEnv is a PURE-ish function: env vars in, Config
-//     struct out. That makes it trivial to unit test (see config_test.go),
-//     whereas config reads scattered through main() are untestable.
-//
-// The convention here is the "12-factor app" style: config comes from
-// environment variables, so the same compiled binary runs locally, in CI,
-// and in production with no code changes — only the environment differs.
+
+// Why a whole package?
+// 1. One place to look. Every knob the app has is declared in the Config struct below...
+// 2. Testability. LoadFromEnv is simply env vars in, Config struct out. That makes it trivial to unit test (see config_test.go),
+
+// My design choice: "12-factor app" style -> config comes from environment variables, so the same compiled binary runs locally, in CI, and in production with no code changes.
 package config
 
 import (
@@ -20,59 +14,69 @@ import (
 )
 
 // Config holds every setting the application needs at startup.
-//
-// The fields are plain strings — we keep parsing/validation minimal here and
-// let each subsystem interpret its own value (pgx parses DatabaseURL, the
-// redis client parses RedisURL). The one thing we DO validate is Port,
-// because a bad port fails in a confusing way otherwise.
-type Config struct {
-	// Port is the TCP port the HTTP server listens on, e.g. "4000".
-	// Stored as a string because that's how it's used (":" + Port), but
-	// validated as a number in LoadFromEnv.
-	Port string
+// fields -> plain strings
+// keep parsing/validation minimal here and let each subsystem interpret its own value
+// e.g. pgx parses DatabaseURL, redis client parses RedisURL
+// ONLY validate Port
+type Config struct{
+	// store as string, (":" + Port)
+	Port string 
 
-	// DatabaseURL is a Postgres connection string (a "DSN"), e.g.
-	// postgres://user:password@host:5432/dbname?sslmode=disable
-	// The default points at the Postgres container from docker-compose.yml.
-	DatabaseURL string
+	// Postgres connection string (e.g. postgres://user:password@host:5432/dbname?sslmode=disable)
+	// default points at the Postgres container from docker-compose.yml.
+	DatabaseURL string 
 
-	// RedisURL is the Redis connection string, e.g. redis://localhost:6379/0
-	// (the trailing /0 selects Redis's database number 0 — Redis has 16
-	// numbered keyspaces by default). Unused until we add caching; declared
-	// now so the config surface is complete from day one.
+	// RedisURL is the Redis connection string e.g. redis://localhost:6379/0 -> recall, the trailing /0 select's Redis's database number 0
+	// Redis has 16 numbered keyspaces by default. Unused until we add caching; declared now so the config surface is complete from day one.
+	// Each keyspace represents the key for one database, and there are essentially 16 databases.
 	RedisURL string
 }
 
-// Addr returns the listen address for http.Server, e.g. ":4000".
-// The ":" prefix means "every network interface on this machine".
-//
-// Note the receiver syntax: `func (c Config) Addr()` declares a METHOD on
-// Config. `c` is like `self` in Python, except you name it yourself (short
-// names are idiomatic). This is a value receiver — the method gets a copy of
-// the struct, which is fine because it only reads.
-func (c Config) Addr() string {
+
+// http.Server is a struct in Go's built-in net/http package that a program that listens for web requests from clients (like a browser) and sends back responses
+// workflow:
+// 1. Handler: I first write a function or struct that implements the http.Handler interface to process the incoming requests. http.Handler receives two parameters: http.ResponseWriter (to send reply) and *http.Request (which contains details of the clients request)
+// 2. Multiplexer: server uses a router to map specific URL paths (like /hello) to my handler
+// 3. Listen and ListenAndServe: I pass my router and network address to http.ListenAndServe() to start the server, which listens for requests and automatically handles each one in its own goroutine
+
+// Addr() is a method that returns the listen address for http.Server, e.g. ":4000".
+func (c Config) Addr() string{
 	return ":" + c.Port
 }
 
-// LoadFromEnv builds a Config from environment variables, applying local-dev
-// defaults for anything unset. It returns an error (instead of calling
-// log.Fatal itself) so the CALLER decides what to do — main() will exit, but
-// a test can just assert on the error. Libraries return errors; only main
-// gets to kill the process.
-func LoadFromEnv() (Config, error) {
+
+// envOr reads an env variable and falls back to a default when its null
+// I originally had this in main, but moved it here to enforce separation of concerns 
+// os.Getenv returns "" both when the variable is unset and when it's set to
+// an empty string.
+// Note the lowercase name: in Go, lowercase identifiers are UNEXPORTED (private to this package). Only Config, Addr, and LoadFromEnv
+// are part of this package's public API.
+func envOr(key, fallback string) string{
+	if v := os.Getenv(key); v != ""{
+		return v
+	}
+	return fallback
+
+}
+
+
+
+
+// LoadFromEnv builds a Config from env vars, applying local-dev defaults for anything unset (uphold 12-factor app style)
+// I want it to return an error, so CALLER decides what to do -> main() will exit, but a I want to use a test to assert on the error
+// General pattern: Libraries return errors; only main can kill the process
+func LoadFromEnv() (Config, error){
 	cfg := Config{
-		Port: envOr("PORT", "4000"),
+		Port: env0r("PORT", "4000"),
 		// This default matches the credentials in docker-compose.yml.
-		// sslmode=disable is fine for localhost; production DSNs come from
-		// the environment and will require TLS.
+		// sslmode=disable is fine for localhost; production DSNs come from the environment and will require TLS.
 		DatabaseURL: envOr("DATABASE_URL", "postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=disable"),
 		RedisURL:    envOr("REDIS_URL", "redis://localhost:6379/0"),
 	}
 
-	// Validate the port: must parse as an integer in the valid TCP port
-	// range. strconv.Atoi ("ASCII to integer") returns two values — the
-	// number and an error — which is Go's universal pattern for "this
-	// operation can fail".
+	// recall: I need to validate the port
+	// I must parse as an integer in the valid TCP port
+	// range . strconv.Atoi ("ASCII to integer") returns the number and an error
 	port, err := strconv.Atoi(cfg.Port)
 	if err != nil || port < 1 || port > 65535 {
 		// fmt.Errorf builds an error value from a format string. %q wraps
@@ -83,20 +87,12 @@ func LoadFromEnv() (Config, error) {
 	}
 
 	return cfg, nil
+
 }
 
-// envOr reads an environment variable and falls back to a default when it's
-// unset or empty. (Moved here from cmd/api/main.go — config concerns live in
-// the config package now.)
-//
-// os.Getenv returns "" both when the variable is unset and when it's set to
-// an empty string — for our purposes those mean the same thing: "use the
-// default". Note the lowercase name: in Go, lowercase identifiers are
-// UNEXPORTED (private to this package). Only Config, Addr, and LoadFromEnv
-// are part of this package's public API.
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
+
+	
+
+
+	
+
