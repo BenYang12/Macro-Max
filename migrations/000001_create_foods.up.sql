@@ -1,0 +1,1 @@
+-- Undo of 000001. DROP TABLE removes the table AND its indexes/constraints.

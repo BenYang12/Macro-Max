@@ -11,10 +11,16 @@
 -include .env
 export
 
+# ?= assigns only if the variable isn't already set — so a .env file (or the
+# shell environment) always wins over this default. Must match the default in
+# internal/config/config.go: one source of truth per environment, two places
+# that agree on the fallback.
+DATABASE_URL ?= postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=disable
+
 # .PHONY tells make these targets are commands, not files it should build.
 # Without it, creating a file literally named "test" would break `make test`
 # (make would see the file exists and say "nothing to do").
-.PHONY: run test up down down-v psql logs
+.PHONY: run test up down down-v psql logs migrate-new migrate-up migrate-down
 
 ## Development loop
 
@@ -40,3 +46,16 @@ psql:           # open an interactive SQL shell inside the Postgres container
 
 logs:           # tail all service logs
 	docker compose logs -f
+
+## Migrations (golang-migrate CLI)
+
+
+migrate-new:    # creates a new pair of empty migration files. Files include .sql, they are put in migrations/, use sequential numbering. One is what to do, and one is how to undo it. Every migration comes in an up/down pair so I can roll changes forward and backward
+	migrate create -ext sql -dir migrations -seq $(name) 
+
+
+migrate-up:     # "make migrate-up" -> make finds the migrate-up target and runds the indented command below it
+	migrate -path migrations -database "$(DATABASE_URL)" up
+
+migrate-down:   # undo ONE migration (the most recent) — deliberate, not "down all"
+	migrate -path migrations -database "$(DATABASE_URL)" down 1
