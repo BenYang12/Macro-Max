@@ -48,14 +48,13 @@ logs:           # tail all service logs
 	docker compose logs -f
 
 ## Migrations (golang-migrate CLI)
-
-
+## The first time migrate up touches my database, it creates schema-migrations -> one row: version (highest migration applied) and dirty (did one fail halfway?)
 migrate-new:    # creates a new pair of empty migration files. Files include .sql, they are put in migrations/, use sequential numbering. One is what to do, and one is how to undo it. Every migration comes in an up/down pair so I can roll changes forward and backward
 	migrate create -ext sql -dir migrations -seq $(name) 
 
-
-migrate-up:     # "make migrate-up" -> make finds the migrate-up target and runds the indented command below it
-	migrate -path migrations -database "$(DATABASE_URL)" up
-
-migrate-down:   # undo ONE migration (the most recent) — deliberate, not "down all"
+## "make migrate-up" -> make finds the migrate-up target and runs the indented command below it
+migrate-up:     # apply everything not applied yet
+	migrate -path migrations -database "$(DATABASE_URL)" up 
+	
+migrate-down:   # undo exactly ONE migration (the most recent) — deliberate, not "down all"
 	migrate -path migrations -database "$(DATABASE_URL)" down 1
