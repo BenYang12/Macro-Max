@@ -18,21 +18,20 @@ import (
 // keep parsing/validation minimal here and let each subsystem interpret its own value
 // e.g. pgx parses DatabaseURL, redis client parses RedisURL
 // ONLY validate Port
-type Config struct{
+type Config struct {
 	// store as string, (":" + Port)
 	// capital name = public
-	Port string 
+	Port string
 
 	// Postgres connection string (e.g. postgres://user:password@host:5432/dbname?sslmode=disable)
 	// default points at the Postgres container from docker-compose.yml.
-	DatabaseURL string 
+	DatabaseURL string
 
 	// RedisURL is the Redis connection string e.g. redis://localhost:6379/0 -> recall, the trailing /0 select's Redis's database number 0
 	// Redis has 16 numbered keyspaces by default. Unused until we add caching; declared now so the config surface is complete from day one.
 	// Each keyspace represents the key for one database, and there are essentially 16 databases.
 	RedisURL string
 }
-
 
 // http.Server is a struct in Go's built-in net/http package that a program that listens for web requests from clients (like a browser) and sends back responses
 // workflow:
@@ -42,32 +41,28 @@ type Config struct{
 
 // Addr() is a method that returns the listen address for http.Server, e.g. ":4000".
 // value receiver -> method receives copy. read on small structs, everything else, pass in a pointer -> func (c *Config)
-func (c Config) Addr() string{
+func (c Config) Addr() string {
 	return ":" + c.Port
 }
 
-
 // envOr reads an env variable and falls back to a default when its null
-// I originally had this in main, but moved it here to enforce separation of concerns 
+// I originally had this in main, but moved it here to enforce separation of concerns
 // os.Getenv returns "" both when the variable is unset and when it's set to
 // an empty string.
 // Note the lowercase name: in Go, lowercase identifiers are UNEXPORTED (private to this package). Only Config, Addr, and LoadFromEnv
 // are part of this package's public API.
-func envOr(key, fallback string) string{
-	if v := os.Getenv(key); v != ""{
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
 
 }
 
-
-
-
 // LoadFromEnv builds a Config from env vars, applying local-dev defaults for anything unset (uphold 12-factor app style)
 // I want it to return an error, so CALLER decides what to do -> main() will exit, but a I want to use a test to assert on the error
 // General pattern: Libraries return errors; only main can kill the process
-func LoadFromEnv() (Config, error){
+func LoadFromEnv() (Config, error) {
 	cfg := Config{
 		Port: envOr("PORT", "4000"),
 		// This default matches the credentials in docker-compose.yml.
