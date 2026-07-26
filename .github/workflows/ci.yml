@@ -1,0 +1,139 @@
+# CI — runs on every push and pull request.
+#
+# WHAT THIS BUYS: the same checks I run locally (gofmt, vet, unit tests,
+# integration tests against a real Postgres) run automatically on GitHub, on a
+# clean machine, with no dependency on what happens to be installed on my Mac.
+# A green check on a PR means "this actually builds and passes somewhere other
+# than Ben's laptop."
+#
+# VOCABULARY (GitHub Actions):
+#   workflow — this whole file
+#   job      — a unit that gets its own fresh virtual machine
+#   step     — one command or one reusable action inside a job
+#   action   — a packaged step someone else wrote, referenced as owner/repo@version
+
+name: CI
+
+# WHEN this runs. Both entries are needed and they are not redundant:
+#   push to main       — catches anything committed directly
+#   pull_request       — catches a branch BEFORE it merges, which is the point
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Build & test
+    runs-on: ubuntu-latest
+
+    # SERVICE CONTAINERS — the interesting part.
+    #
+    # GitHub starts these Docker containers alongside the job, so the
+    # integration tests get a REAL Postgres instead of being skipped. This is
+    # the CI equivalent of `make up`, and it's why the self-skip pattern in
+    # foods_integration_test.go was worth the trouble: the same test file runs
+    # locally without a database (skipping) and here with one (passing).
+    #
+    # postgres:16-alpine matches docker-compose.yml deliberately. Testing
+    # against a different major version than I develop on would let
+    # version-specific SQL bugs through.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: macrocart
+          POSTGRES_PASSWORD: macrocart
+          POSTGRES_DB: macrocart
+        ports:
+          - 5432:5432
+        # The container reports "started" long before Postgres can accept
+        # connections. Without this healthcheck the first migration would race
+        # the database and fail intermittently — the worst kind of CI failure.
+        # GitHub waits for these to pass before running any step.
+        options: >-
+          --health-cmd "pg_isready -U macrocart"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Environment variables shared by every step below. Same DSN shape as the
+    # Makefile default; the host is localhost because the service container's
+    # port is published to the runner.
+    env:
+      DATABASE_URL: postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=disable
+      TEST_DATABASE_URL: postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=disable
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # go-version-file reads the version from go.mod instead of repeating
+          # it here. One source of truth — bumping go.mod bumps CI too, and the
+          # two can never silently disagree.
+          #
+          # Caveat worth knowing: go.mod pins an exact patch (go 1.26.4), so CI
+          # requires that exact release to exist. If setup-go ever fails to
+          # find it, relax go.mod to `go 1.26`.
+          go-version-file: go.mod
+          # Cache the module download and build cache between runs.
+          cache: true
+
+      - name: Verify formatting
+        # gofmt -l prints the names of files that AREN'T formatted and exits 0
+        # either way, so a bare `gofmt -l .` can never fail a build. Capturing
+        # the output and testing it is what turns it into a real gate.
+        #
+        # Why gate on formatting at all? Because gofmt output is canonical in
+        # Go, so "formatted" is objective. It keeps diffs free of whitespace
+        # noise and ends all style debate.
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        # go vet catches real bugs the compiler allows: Printf arguments that
+        # don't match the format string, unreachable code, suspicious struct
+        # tags. Cheap to run, occasionally saves a debugging session.
+        run: go vet ./...
+
+      - name: Install golang-migrate
+        # Pinned to the same version I run locally. An unpinned "latest" would
+        # mean CI silently changes underneath me on someone else's release
+        # schedule — a classic source of "it worked yesterday".
+        run: |
+          curl -sSL https://github.com/golang-migrate/migrate/releases/download/v4.19.1/migrate.linux-amd64.tar.gz \
+            | tar xz migrate
+          sudo mv migrate /usr/local/bin/migrate
+          migrate -version
+
+      - name: Run migrations
+        run: migrate -path migrations -database "$DATABASE_URL" up
+
+      - name: Test
+        # TEST_DATABASE_URL is set in the job env above, so the integration
+        # tests do NOT skip here — they run against the service container.
+        # That's the whole reason for the service container.
+        #
+        # -race enables the race detector, which instruments the binary to
+        # catch concurrent access to shared memory without synchronization.
+        # This project spawns a goroutine per request, so races are a real
+        # risk, and they are nearly impossible to reproduce by hand. CI is
+        # exactly where this belongs (it's ~10x slower, hence not in `make
+        # test`).
+        run: go test -race -count=1 ./...
+
+      - name: Verify migrations roll back cleanly
+        # A down migration nobody runs is a down migration that doesn't work.
+        # This proves the whole stack can be torn down and rebuilt, which is
+        # what makes `migrate down` trustworthy in an emergency.
+        run: |
+          migrate -path migrations -database "$DATABASE_URL" down -all
+          migrate -path migrations -database "$DATABASE_URL" up

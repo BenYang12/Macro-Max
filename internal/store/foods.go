@@ -31,10 +31,10 @@ type FoodFilter struct {
 	Tag      string // "" = any tag
 }
 
-
 // ListFoods returns all foods matching the filter, orderd by name
 // (s *Store) makes this a METHOD on Store -> anyone holding a *STORE can call st.ListFoods().
-func (s *Store) ListFoods (ctx context.Context, filter FoodFilter) ([]Food, error){
+// *store.Store satisfied FoodStore interface.
+func (s *Store) ListFoods(ctx context.Context, filter FoodFilter) ([]Food, error) {
 	// Recall from SQL:
 	// Read Query has three parts:
 	// 1. SELECT id, name, category, tags -> WHICH columns I want back
@@ -46,17 +46,16 @@ func (s *Store) ListFoods (ctx context.Context, filter FoodFilter) ([]Food, erro
 	// Trick to make a filter optional: WHERE ($1 = '' OR category = $1) -> $1 is empty string
 	// @> means "contains" -> tags @> ARRAY[$2] asks "does the tags list contain everything on the right?"
 
-
 	// ListFoods runs ONE fixed query that covers all cases: no filter, category
 	// only, tag only, or both. We never build SQL strings by hand — that's how
 	// injection bugs happen.
-	
+
 	// The query looks like:
 	//   SELECT ... FROM foods
 	//   WHERE ($1 = '' OR category = $1)          -- category filter (optional)
 	//     AND ($2 = '' OR tags @> ARRAY[$2]::text[])  -- tag filter (optional)
 	//   ORDER BY name
-	
+
 	// HOW "WHERE" WORKS: Postgres checks each row and keeps it only if the
 	// expression is true for that row. So WHERE is a yes/no test, once per row.
 	//
@@ -93,7 +92,7 @@ func (s *Store) ListFoods (ctx context.Context, filter FoodFilter) ([]Food, erro
 		return nil, fmt.Errorf("querying foods: %w", err)
 	}
 
-	// cursor HOLDS the pooled connection until closed. 
+	// cursor HOLDS the pooled connection until closed.
 	// defer, or connections leak until pool runs dry -> classic outage
 	defer rows.Close()
 
@@ -105,7 +104,7 @@ func (s *Store) ListFoods (ctx context.Context, filter FoodFilter) ([]Food, erro
 
 	//rows.Next() advances to the next row and reports whether one exists.
 	// It returns false both when we're DONE and when the stream BROKE - which is why rows.Err() is checked after the loop
-	for rows.Next(){
+	for rows.Next() {
 		var f Food
 		// Scan copies this row's columns into these pointers, IN ORDER.
 		// passes the ADDRESS so Scan can write through it. Nullable columns scan into the pointer fields: NULL -> pointer stays nil, value -> pgx allocates and fills it
@@ -134,7 +133,8 @@ func (s *Store) ListFoods (ctx context.Context, filter FoodFilter) ([]Food, erro
 }
 
 // GetFood returns a single food by primary key, or ErrNotFound
-func (s *Store) GetFood(ctx context.Context, id int64) (Food, error){
+// *store.Store satisfies FoodStore interface
+func (s *Store) GetFood(ctx context.Context, id int64) (Food, error) {
 	query := `
 		SELECT id, name, fdc_id, category, tags,
 		       kcal_per_100g, protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
@@ -143,7 +143,7 @@ func (s *Store) GetFood(ctx context.Context, id int64) (Food, error){
 		WHERE id = $1`
 
 	var f Food
-	// QueryRow is the one-row convenience. defers all errors to Scan - including pgx.ErrNoRows when nothing matched. 
+	// QueryRow is the one-row convenience. defers all errors to Scan - including pgx.ErrNoRows when nothing matched.
 	// Scan handles one row per call
 	err := s.Pool.QueryRow(ctx, query, id).Scan(
 		&f.ID, &f.Name, &f.FdcID, &f.Category, &f.Tags,

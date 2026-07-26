@@ -20,15 +20,38 @@ DATABASE_URL ?= postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=
 # .PHONY tells make these targets are commands, not files it should build.
 # Without it, creating a file literally named "test" would break `make test`
 # (make would see the file exists and say "nothing to do").
-.PHONY: run test up down down-v psql logs migrate-new migrate-up migrate-down
+.PHONY: run test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down
 
 ## Development loop
 
 run:            # start the API on the host (fast restarts)
 	go run ./cmd/api
 
-test:           # run every Go test in the module
+test:           # run every Go test in the module — UNIT tests only in practice,
+                # because integration tests self-skip when TEST_DATABASE_URL is
+                # unset. This is the target that must stay green on any laptop
+                # with no database running.
 	go test ./...
+
+test-int:       # unit AND integration tests, against the compose Postgres.
+                # Integration tests self-skip unless TEST_DATABASE_URL is set,
+                # so this target's whole job is to SET it. It reuses
+                # DATABASE_URL because there's one local database; CI will
+                # point it at its own throwaway service container instead.
+                #
+                # -count=1 is the documented way to DISABLE Go's test result
+                # cache. Go caches a passing result and reprints it without
+                # re-running when the code is unchanged — but these tests also
+                # depend on DATABASE STATE, which Go can't see. A cached "ok"
+                # after the data changed would be a lie.
+	TEST_DATABASE_URL="$(DATABASE_URL)" go test -count=1 ./...
+
+seed:           # load the ~42-food dev catalog into Postgres.
+                # Safe to re-run: the seeder upserts, so running it twice
+                # leaves the same rows rather than duplicating or erroring.
+                # Run it AFTER migrate-up — it writes rows, it doesn't create
+                # tables.
+	go run ./cmd/seed
 
 ## Infrastructure (Docker Compose)
 

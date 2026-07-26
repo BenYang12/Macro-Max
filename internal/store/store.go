@@ -52,3 +52,14 @@ func NewPool(ctx context.Context, dsn string) (*Store, error) {
 func (s *Store) Close() {
 	s.Pool.Close()
 }
+
+// Ping checks that the database is still reachable, for the healthcheck
+// endpoint. NewPool pings once at STARTUP; this is the same check on demand,
+// because a database that was up at boot can go down later.
+//
+// It exists as a method here rather than the handler reaching for
+// s.Pool.Ping() directly so that pgx stays contained in this package — the
+// same rule that made ErrNotFound worth defining.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.Pool.Ping(ctx)
+}

@@ -42,9 +42,7 @@ func main() {
 	defer st.Close()
 	log.Println("connected to database")
 
-	_ = st // handlers start using the store in step 6; this quiets the compiler until then
-
-	srv := server.New(cfg.Addr())
+	srv := server.New(cfg.Addr(), st)
 
 	// ListenAndServe BLOCKS until the server stops, but main must also watch
 	// ctx for the shutdown signal — two things to wait on, so the server

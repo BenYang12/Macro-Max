@@ -1,17 +1,30 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+// fakePinger is the smallest fake in the project — one method, one field.
+// That's the payoff of the Pinger interface being one method wide.
+type fakePinger struct {
+	err error // nil = database healthy
+}
+
+func (f *fakePinger) Ping(ctx context.Context) error { return f.err }
 
 // TestHealth verifies that the Health handler returns a 200 status code, a
 // JSON content type, and a body with the expected shape. Note the test
 // function signature: TestXxx(t *testing.T). This is what `go test` looks
 // for — the "Test" prefix and the *testing.T parameter.
 func TestHealth(t *testing.T) {
+	// A healthy database: the fake's Ping returns nil.
+	h := NewHealthHandler(&fakePinger{})
+
 	// httptest.NewRequest builds a fake *http.Request without touching the
 	// network. The first arg is the HTTP method, the second is the target
 	// URL (the path is what our handler will see), and the third is the
@@ -23,9 +36,9 @@ func TestHealth(t *testing.T) {
 	// after the handler runs.
 	rr := httptest.NewRecorder()
 
-	// Call the handler directly. This is just a function call — no server,
+	// Call the handler directly. This is just a method call — no server,
 	// no ports, no goroutines. Fast and deterministic.
-	Health(rr, req)
+	h.Check(rr, req)
 
 	// Now inspect what the handler wrote.
 
@@ -58,5 +71,36 @@ func TestHealth(t *testing.T) {
 	}
 	if body["version"] == "" {
 		t.Errorf("expected non-empty version field")
+	}
+	if body["database"] != "ok" {
+		t.Errorf("expected database field 'ok', got %q", body["database"])
+	}
+}
+
+// The case that makes the endpoint worth having: the process is up, but the
+// database is not. A healthcheck that returned 200 here would tell a load
+// balancer to keep routing traffic into a broken instance.
+func TestHealth_DatabaseDownReturns503(t *testing.T) {
+	h := NewHealthHandler(&fakePinger{err: errors.New("connection refused")})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/healthcheck", nil)
+	rr := httptest.NewRecorder()
+
+	h.Check(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected status %d, got %d", http.StatusServiceUnavailable, rr.Code)
+	}
+
+	var body map[string]string
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+
+	if body["status"] != "degraded" {
+		t.Errorf("expected status field 'degraded', got %q", body["status"])
+	}
+	if body["database"] != "unavailable" {
+		t.Errorf("expected database field 'unavailable', got %q", body["database"])
 	}
 }

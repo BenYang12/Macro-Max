@@ -1,8 +1,3 @@
-// Package server wires HTTP handlers into a running server. It's the "glue"
-// layer between individual handlers and the operating system's network stack.
-// Keeping this in its own package (rather than in main.go) makes it easy to
-// test the routing setup and to swap out the entry point later — for example,
-// if we want to run the same server code from an integration test.
 package server
 
 import (
@@ -10,38 +5,55 @@ import (
 	"time"
 
 	"github.com/BenYang12/Macro-Max/internal/handler"
+	"github.com/BenYang12/Macro-Max/internal/store"
 )
 
-// New returns an *http.Server configured with our routes and sensible
-// production timeouts. It doesn't call ListenAndServe — the caller decides
-// when and how to start it. This separation makes the server testable: a
-// test can construct the server, poke at its Handler, and never open a port.
-func New(addr string) *http.Server {
-	// http.NewServeMux is the standard library's built-in HTTP router. As of
-	// Go 1.22 it supports method-based routing (e.g. "GET /v1/healthcheck")
-	// and URL parameter extraction (r.PathValue("id")), which used to be the
-	// main reasons people reached for third-party routers like chi. Decision:
-	// we're staying on the stdlib mux for this project — it covers everything
-	// this API needs, and middleware is just a function that wraps a handler.
+// New now takes the *store.Store so it can build the data-backed handlers
+// and register their routes
+// still doesn't call ListenAndServe -> delegate to main
+// goal of New is to be the assembly point that wires
+// everything
+func New(addr string, st *store.Store) *http.Server {
+	// multiplexer = router
+	// looks at incoming request's method + path -> decides WHICH handler function should run
 	mux := http.NewServeMux()
 
-	// Register the health check route. The "GET " prefix (with a space) is
-	// the Go 1.22 syntax that restricts this route to GET requests. Without
-	// it, the mux would match any method — a subtle source of bugs.
-	mux.HandleFunc("GET /v1/healthcheck", handler.Health)
+	// Health check, unchanged.
+	// mux.HandleFunc registers a route and returns nothing
+	// Health check. It now pings the database, so like every other handler it
+	// gets the store injected rather than being a bare function.
+	health := handler.NewHealthHandler(st)
+	mux.HandleFunc("GET /v1/healthcheck", health.Check)
 
-	// Construct the server with explicit timeouts. The zero-value
-	// http.Server has NO timeouts, which is a well-known footgun: a slow or
-	// malicious client can hold a connection open forever, exhausting your
-	// file descriptors. Always set these.
-	//
-	// - ReadTimeout: max time to read the full request (headers + body).
-	// - WriteTimeout: max time to write the response.
-	// - IdleTimeout: max time a keep-alive connection sits idle before
-	//   being closed.
-	//
-	// The values below are reasonable defaults for a JSON API. Tune them
-	// later based on real traffic patterns.
+	// Foods endpoints
+	// Build ONE FoodsHandler and hand it the store
+	// FoodsHandler contains a store, which implements FoodStore interface
+	foods := handler.NewFoodsHandler(st)
+
+	// {id} in pattern is a WILDCARD
+	// it matches one path segment and becomes r.PathValue("id") inside the handler
+	// register the specific /{id} route and collection routes separately;
+	// the mux picks the most specific match
+	mux.HandleFunc("GET /v1/foods", foods.List)
+	mux.HandleFunc("GET /v1/foods/{id}", foods.Get)
+
+	// Products endpoints. The SAME *store.Store satisfies ProductStore as
+	// well as FoodStore — one concrete type, two narrow interface views of it.
+	// That's structural typing paying off: adding methods in step 7 required
+	// no change to any existing wiring.
+	products := handler.NewProductsHandler(st)
+
+	mux.HandleFunc("GET /v1/products", products.List)
+	mux.HandleFunc("GET /v1/products/{id}", products.Get)
+
+	// Targets. Note POST here — the first non-GET route in the app. The mux
+	// matches on method, so POST /v1/targets and a hypothetical GET
+	// /v1/targets are entirely separate registrations.
+	targets := handler.NewTargetsHandler(st)
+
+	mux.HandleFunc("POST /v1/targets", targets.Create)
+	mux.HandleFunc("GET /v1/targets/{id}", targets.Get)
+
 	return &http.Server{
 		Addr:         addr,
 		Handler:      mux,
