@@ -130,6 +130,20 @@ jobs:
         # test`).
         run: go test -race -count=1 ./...
 
+      - name: Seed (smoke test, and idempotence)
+        # Deliberately AFTER the tests, not before. Running it first would let
+        # an integration test accidentally depend on seed data — which is
+        # exactly the bug that made this workflow red the first time it ran.
+        # Tests must pass against a migrated-but-empty database; the seeder is
+        # verified separately, right here.
+        #
+        # Running it TWICE is the actual assertion: the second run proves the
+        # ON CONFLICT upserts are idempotent. A duplicate-key error would fail
+        # the step.
+        run: |
+          go run ./cmd/seed
+          go run ./cmd/seed
+
       - name: Verify migrations roll back cleanly
         # A down migration nobody runs is a down migration that doesn't work.
         # This proves the whole stack can be torn down and rebuilt, which is
