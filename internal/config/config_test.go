@@ -17,6 +17,7 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("REDIS_URL", "")
+	t.Setenv("FDC_API_KEY", "")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -38,6 +39,12 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.RedisURL != "redis://localhost:6379/0" {
 		t.Errorf("default RedisURL: want %q, got %q", "redis://localhost:6379/0", cfg.RedisURL)
 	}
+	// Secrets deliberately have NO default — see the comment on Config.FDCAPIKey.
+	// An unset key must stay empty so the command that needs it can say so
+	// clearly, rather than failing later with a 403 from USDA.
+	if cfg.FDCAPIKey != "" {
+		t.Errorf("default FDCAPIKey: want empty, got %q", cfg.FDCAPIKey)
+	}
 }
 
 // TestLoadFromEnvOverrides checks that environment variables win over the
@@ -47,6 +54,7 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Setenv("PORT", "9000")
 	t.Setenv("DATABASE_URL", "postgres://prod-db/macrocart")
 	t.Setenv("REDIS_URL", "redis://prod-redis:6379/1")
+	t.Setenv("FDC_API_KEY", "test-key-123")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -61,6 +69,9 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.RedisURL != "redis://prod-redis:6379/1" {
 		t.Errorf("RedisURL override: want %q, got %q", "redis://prod-redis:6379/1", cfg.RedisURL)
+	}
+	if cfg.FDCAPIKey != "test-key-123" {
+		t.Errorf("FDCAPIKey override: want %q, got %q", "test-key-123", cfg.FDCAPIKey)
 	}
 }
 

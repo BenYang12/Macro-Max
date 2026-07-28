@@ -31,6 +31,19 @@ type Config struct {
 	// Redis has 16 numbered keyspaces by default. Unused until we add caching; declared now so the config surface is complete from day one.
 	// Each keyspace represents the key for one database, and there are essentially 16 databases.
 	RedisURL string
+
+	// FDCAPIKey is the USDA FoodData Central key (Phase 2), used only by
+	// cmd/fdcimport.
+	//
+	// NOTE THE MISSING DEFAULT. Every field above falls back to a working
+	// local value, because a wrong Postgres URL is obvious and harmless. A
+	// SECRET is different: there is no safe placeholder, and inventing one
+	// would turn "you forgot to set the key" into a confusing 403 from USDA.
+	// So it defaults to "" and the ONE command that needs it checks for
+	// emptiness and exits with a clear message. Validate secrets where they
+	// are used, not where they are loaded — otherwise `make run` would refuse
+	// to start the API over a key the API never touches.
+	FDCAPIKey string
 }
 
 // http.Server is a struct in Go's built-in net/http package that a program that listens for web requests from clients (like a browser) and sends back responses
@@ -69,6 +82,10 @@ func LoadFromEnv() (Config, error) {
 		// sslmode=disable is fine for localhost; production DSNs come from the environment and will require TLS.
 		DatabaseURL: envOr("DATABASE_URL", "postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=disable"),
 		RedisURL:    envOr("REDIS_URL", "redis://localhost:6379/0"),
+
+		// No fallback: a secret has no sensible default. os.Getenv returns ""
+		// when unset, which is exactly the "absent" value cmd/fdcimport checks.
+		FDCAPIKey: os.Getenv("FDC_API_KEY"),
 	}
 
 	// recall: I need to validate the port
