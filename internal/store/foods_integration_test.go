@@ -171,3 +171,72 @@ func TestGetFood_UnknownIDIsNotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotFound for a missing id; got %v", err)
 	}
 }
+
+// TestUpdateFoodNutrition_WritesOnlyNutritionColumns is the important
+// guarantee of the FDC importer: it must overwrite nutrition and fdc_id while
+// leaving OUR editorial columns (category, tags, max_grams_per_week) alone.
+// An importer that clobbered category would silently break the solver's
+// variety constraints.
+func TestUpdateFoodNutrition_WritesOnlyNutritionColumns(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	name := "__test_fdc_update__"
+	insertTestFood(t, st, name, "protein") // inserted with tags {gluten_free}
+
+	err := st.UpdateFoodNutrition(ctx, name, 171077, 165.5, 31.0, 1.2, 3.6)
+	if err != nil {
+		t.Fatalf("UpdateFoodNutrition: %v", err)
+	}
+
+	got, err := st.GetFoodByName(ctx, name)
+	if err != nil {
+		t.Fatalf("GetFoodByName: %v", err)
+	}
+
+	// Nutrition was replaced.
+	if got.KcalPer100g != 165.5 {
+		t.Errorf("kcal = %v; want 165.5", got.KcalPer100g)
+	}
+	if got.ProteinGPer100g != 31.0 {
+		t.Errorf("protein = %v; want 31.0", got.ProteinGPer100g)
+	}
+	// fdc_id was linked — and came back as a non-nil pointer.
+	if got.FdcID == nil {
+		t.Fatal("fdc_id is nil; want 171077")
+	}
+	if *got.FdcID != 171077 {
+		t.Errorf("fdc_id = %d; want 171077", *got.FdcID)
+	}
+	// Editorial columns survived untouched.
+	if got.Category != "protein" {
+		t.Errorf("category = %q; want it unchanged as %q", got.Category, "protein")
+	}
+	if len(got.Tags) != 1 || got.Tags[0] != "gluten_free" {
+		t.Errorf("tags = %v; want them unchanged as [gluten_free]", got.Tags)
+	}
+}
+
+// An UPDATE matching no rows is not a SQL error — it silently does nothing.
+// RowsAffected is the only way to catch it, and the importer depends on this
+// surfacing as ErrNotFound so a typo'd food name fails loudly.
+func TestUpdateFoodNutrition_UnknownNameIsNotFound(t *testing.T) {
+	st := newTestStore(t)
+
+	err := st.UpdateFoodNutrition(context.Background(),
+		"__no_such_food__", 1, 100, 10, 10, 10)
+
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound; got %v", err)
+	}
+}
+
+func TestGetFoodByName_UnknownIsNotFound(t *testing.T) {
+	st := newTestStore(t)
+
+	_, err := st.GetFoodByName(context.Background(), "__no_such_food__")
+
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound; got %v", err)
+	}
+}

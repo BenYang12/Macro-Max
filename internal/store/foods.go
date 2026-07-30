@@ -162,3 +162,67 @@ func (s *Store) GetFood(ctx context.Context, id int64) (Food, error) {
 	return f, nil
 
 }
+
+// UpdateFoodNutrition writes authoritative USDA nutrition onto an existing
+// food, linking it to its FoodData Central record. Used by cmd/fdcimport.
+//
+// WHY MATCH ON name, NOT id: the importer is driven by a food NAME (the same
+// key the seeder uses), because a human curates the name -> fdc_id mapping.
+// Requiring the caller to know the numeric id would mean a lookup first, and
+// two round trips where one suffices.
+//
+// The UPDATE deliberately touches only the nutrition columns and fdc_id. It
+// does NOT touch category, tags, or max_grams_per_week: those are OUR editorial
+// decisions, not USDA's, and an importer must never overwrite a field it isn't
+// the source of truth for. (The seeder follows the mirror-image rule — it never
+// overwrites fdc_id.)
+func (s *Store) UpdateFoodNutrition(ctx context.Context, name string, fdcID int64, kcal, protein, carbs, fat float64) error {
+	query := `
+		UPDATE foods
+		SET fdc_id             = $2,
+		    kcal_per_100g      = $3,
+		    protein_g_per_100g = $4,
+		    carbs_g_per_100g   = $5,
+		    fat_g_per_100g     = $6,
+		    updated_at         = now()
+		WHERE name = $1`
+
+	// Exec, not QueryRow: an UPDATE returns no rows, only a count of how many
+	// it changed. That count is the ONLY way to tell "updated successfully"
+	// from "matched nothing" — an UPDATE against zero rows is not an error in
+	// SQL, it just quietly does nothing. Checking RowsAffected is what turns
+	// a silent no-op into a real failure.
+	tag, err := s.Pool.Exec(ctx, query, name, fdcID, kcal, protein, carbs, fat)
+	if err != nil {
+		return fmt.Errorf("updating nutrition for %q: %w", name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("updating nutrition for %q: %w", name, ErrNotFound)
+	}
+	return nil
+}
+
+// GetFoodByName looks up a food by its unique name. The importer needs the
+// stored category to run the category-coherence tripwire before writing.
+func (s *Store) GetFoodByName(ctx context.Context, name string) (Food, error) {
+	query := `
+		SELECT id, name, fdc_id, category, tags,
+		       kcal_per_100g, protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+		       max_grams_per_week, created_at, updated_at
+		FROM foods
+		WHERE name = $1`
+
+	var f Food
+	err := s.Pool.QueryRow(ctx, query, name).Scan(
+		&f.ID, &f.Name, &f.FdcID, &f.Category, &f.Tags,
+		&f.KcalPer100g, &f.ProteinGPer100g, &f.CarbsGPer100g, &f.FatGPer100g,
+		&f.MaxGramsPerWeek, &f.CreatedAt, &f.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Food{}, ErrNotFound
+		}
+		return Food{}, fmt.Errorf("querying food %q: %w", name, err)
+	}
+	return f, nil
+}

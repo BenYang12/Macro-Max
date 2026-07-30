@@ -20,7 +20,7 @@ DATABASE_URL ?= postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=
 # .PHONY tells make these targets are commands, not files it should build.
 # Without it, creating a file literally named "test" would break `make test`
 # (make would see the file exists and say "nothing to do").
-.PHONY: run test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down
+.PHONY: run test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry
 
 ## Development loop
 
@@ -81,3 +81,16 @@ migrate-up:     # apply everything not applied yet
 	
 migrate-down:   # undo exactly ONE migration (the most recent) — deliberate, not "down all"
 	migrate -path migrations -database "$(DATABASE_URL)" down 1
+
+## USDA FoodData Central import (Phase 2)
+## Needs FDC_API_KEY in .env — get one free at
+## https://fdc.nal.usda.gov/api-key-signup.html
+
+fdc-suggest:    # search FDC for every seeded food, print paste-ready mapping entries
+	go run ./cmd/fdcimport -suggest
+
+fdc-import:     # apply the curated mapping in cmd/fdcimport/mapping.go
+	go run ./cmd/fdcimport -all
+
+fdc-dry:        # same as fdc-import but writes nothing — always run this first
+	go run ./cmd/fdcimport -all -dry-run
