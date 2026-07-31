@@ -10,8 +10,10 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 
 	solverv1 "github.com/BenYang12/Macro-Max/internal/gen/solver/v1"
@@ -25,6 +27,14 @@ type SolveStore interface {
 	GetTarget(ctx context.Context, id int64) (store.UserTarget, error)
 	ListSolveCandidates(ctx context.Context, storeID string, dietTags []string, excludeFoodIDs []int64) ([]store.Product, error)
 	ListFoodsByIDs(ctx context.Context, ids []int64) (map[int64]store.Food, error)
+	SaveBasket(ctx context.Context, b *store.Basket, items []store.BasketItem) error
+}
+
+// SolveCache is the Redis layer, as an interface so tests can skip it entirely.
+// Every method is allowed to be a no-op: a cache must never be load-bearing.
+type SolveCache interface {
+	Get(ctx context.Context, key string) *solverv1.SolveResponse
+	Set(ctx context.Context, key string, resp *solverv1.SolveResponse)
 }
 
 // Solver is the solver dependency, declared as an interface for exactly the
@@ -37,10 +47,11 @@ type Solver interface {
 type SolveHandler struct {
 	Store  SolveStore
 	Solver Solver
+	Cache  SolveCache // may be nil; every use is guarded
 }
 
-func NewSolveHandler(s SolveStore, sv Solver) *SolveHandler {
-	return &SolveHandler{Store: s, Solver: sv}
+func NewSolveHandler(s SolveStore, sv Solver, c SolveCache) *SolveHandler {
+	return &SolveHandler{Store: s, Solver: sv, Cache: c}
 }
 
 // solveRequest is the POST body. Pointers again, for the same present-vs-absent
@@ -118,12 +129,39 @@ func (h *SolveHandler) Solve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.Solver.Solve(ctx, solver.SolveInput{
+	input := solver.SolveInput{
 		Target:       target,
 		Products:     products,
 		Foods:        foods,
 		IntegerPacks: req.IntegerPacks,
-	})
+	}
+
+	// THE CACHE LOOKUP. The key is derived from the fully-built request plus a
+	// fingerprint of the prices, so any change to targets, catalog, options, or
+	// prices produces a different key and therefore a miss. I never have to
+	// decide when to invalidate — I only have to make sure everything that
+	// affects the answer is in the key.
+	//
+	// Building the request twice (once here, once inside Solve) is a little
+	// wasteful and entirely deliberate: the alternative is hashing my own
+	// hand-picked subset of fields, which is how cache-staleness bugs get
+	// written.
+	var cacheKey string
+	if h.Cache != nil {
+		if built, err := solver.BuildRequest(input); err == nil {
+			if k, err := solver.SolveKey(built, products); err == nil {
+				cacheKey = k
+				if cached := h.Cache.Get(ctx, k); cached != nil {
+					w.Header().Set("X-Cache", "hit")
+					writeSolveResponse(w, cached)
+					return
+				}
+			}
+		}
+		w.Header().Set("X-Cache", "miss")
+	}
+
+	resp, err := h.Solver.Solve(ctx, input)
 	if err != nil {
 		// A transport failure or a timeout. The solver being down is MY
 		// problem, not the client's, so it's a 500.
@@ -131,7 +169,63 @@ func (h *SolveHandler) Solve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if cacheKey != "" {
+		h.Cache.Set(ctx, cacheKey, resp)
+	}
+
+	// Persist EVERY solve, including infeasible ones. A record of what was
+	// asked and what came back is worth far more than the one insert it costs,
+	// and infeasible results are the most interesting ones to look back on.
+	//
+	// A persistence failure must NOT fail the request: the user already has
+	// their answer, and losing the audit row is my problem, not theirs. So this
+	// logs and continues rather than returning.
+	h.persist(ctx, target, cacheKey, resp)
+
 	writeSolveResponse(w, resp)
+}
+
+// persist records the solve. Best-effort by design — see the call site.
+func (h *SolveHandler) persist(ctx context.Context, target store.UserTarget, key string, resp *solverv1.SolveResponse) {
+	stats, _ := json.Marshal(map[string]any{
+		"solve_seconds":             resp.SolveSeconds,
+		"message":                   resp.Message,
+		"min_feasible_budget_cents": resp.MinFeasibleBudgetCents,
+	})
+
+	basket := store.Basket{
+		TargetID:       target.ID,
+		StoreID:        target.StoreID,
+		SolveKey:       key,
+		Status:         statusString(resp.Status),
+		TotalCostCents: int(resp.TotalCostCents),
+		SolverStats:    stats,
+	}
+
+	items := make([]store.BasketItem, 0, len(resp.Items))
+	for _, it := range resp.Items {
+		// The schema requires packs > 0, and an LP solve can legitimately
+		// produce a fractional pack count below 1. Rounding up is the honest
+		// reading: you cannot buy a fraction of a bag, so any nonzero amount
+		// means at least one pack.
+		packs := int(it.Packs)
+		if float64(packs) < it.Packs {
+			packs++
+		}
+		if packs < 1 {
+			continue
+		}
+		items = append(items, store.BasketItem{
+			ProductID: it.ProductId,
+			Packs:     packs,
+			Grams:     it.Grams,
+			CostCents: int(it.CostCents),
+		})
+	}
+
+	if err := h.Store.SaveBasket(ctx, &basket, items); err != nil {
+		log.Printf("warning: failed to persist basket for target %d: %v", target.ID, err)
+	}
 }
 
 // writeSolveResponse maps the protobuf answer onto my JSON envelope.

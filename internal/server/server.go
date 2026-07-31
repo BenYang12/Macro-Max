@@ -18,7 +18,7 @@ import (
 // solver couldn't be dialed, every other endpoint should still work, and only
 // /v1/solve should fail. A hard dependency here would mean my whole API refuses
 // to start because an optional microservice is down.
-func New(addr string, st *store.Store, sv *solver.Client) *http.Server {
+func New(addr string, st *store.Store, sv *solver.Client, cache *solver.Cache) *http.Server {
 	// multiplexer = router
 	// looks at incoming request's method + path -> decides WHICH handler function should run
 	mux := http.NewServeMux()
@@ -63,7 +63,13 @@ func New(addr string, st *store.Store, sv *solver.Client) *http.Server {
 	// Registered only when a solver client was built, so a missing solver is a
 	// 404 on this one route rather than a nil-pointer panic on first request.
 	if sv != nil {
-		solve := handler.NewSolveHandler(st, sv)
+		// The cache may be nil (Redis down or misconfigured); the handler
+		// guards every use, so a missing cache just means every solve computes.
+		var c handler.SolveCache
+		if cache != nil {
+			c = cache
+		}
+		solve := handler.NewSolveHandler(st, sv, c)
 		mux.HandleFunc("POST /v1/solve", solve.Solve)
 	}
 

@@ -6,3 +6,19 @@ docs/PLAN.md
 # Local environment variables (real secrets live here; .env.example is committed)
 .env
 .venv
+
+
+#my .pyc files -> only reson these are added is because they are build artifcats and will produce noisy diffs forever
+solver/__pycache__/lp.cpython-313.pyc
+solver/gen/__pycache__/__init__.cpython-313.pyc
+
+
+# Python build artifacts. Compiled bytecode is machine- and version-specific
+# (note the "cpython-313" in the filenames), so committing it means noisy diffs
+# forever and zero benefit — Python regenerates these on every import.
+__pycache__/
+*.py[cod]
+
+# uv's virtualenv. The LOCKFILE (solver/uv.lock) IS committed, because that's
+# what makes installs reproducible; the venv it produces is derived data.
+.venv/

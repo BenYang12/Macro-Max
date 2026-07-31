@@ -29,6 +29,10 @@ type fakeSolveStore struct {
 	gotStoreID  string
 	gotDietTags []string
 	gotExcluded []int64
+
+	savedBasket *store.Basket
+	savedItems  []store.BasketItem
+	saveErr     error
 }
 
 func (f *fakeSolveStore) GetTarget(ctx context.Context, id int64) (store.UserTarget, error) {
@@ -42,6 +46,33 @@ func (f *fakeSolveStore) ListSolveCandidates(ctx context.Context, storeID string
 
 func (f *fakeSolveStore) ListFoodsByIDs(ctx context.Context, ids []int64) (map[int64]store.Food, error) {
 	return f.foods, nil
+}
+
+func (f *fakeSolveStore) SaveBasket(ctx context.Context, b *store.Basket, items []store.BasketItem) error {
+	f.savedBasket = b
+	f.savedItems = items
+	return f.saveErr
+}
+
+// fakeCache records what was asked for and can be primed with a hit.
+type fakeCache struct {
+	stored map[string]*solverv1.SolveResponse
+	hit    *solverv1.SolveResponse
+	gets   int
+	sets   int
+}
+
+func (c *fakeCache) Get(ctx context.Context, key string) *solverv1.SolveResponse {
+	c.gets++
+	return c.hit
+}
+
+func (c *fakeCache) Set(ctx context.Context, key string, resp *solverv1.SolveResponse) {
+	c.sets++
+	if c.stored == nil {
+		c.stored = map[string]*solverv1.SolveResponse{}
+	}
+	c.stored[key] = resp
 }
 
 type fakeSolver struct {
@@ -93,7 +124,7 @@ func postSolve(t *testing.T, h *SolveHandler, body string) *httptest.ResponseRec
 }
 
 func TestSolve_HappyPathReturnsBasket(t *testing.T) {
-	h := NewSolveHandler(okStore(), okSolver())
+	h := NewSolveHandler(okStore(), okSolver(), nil)
 
 	rr := postSolve(t, h, `{"target_id": 1}`)
 
@@ -140,7 +171,7 @@ func TestSolve_PassesDietFiltersToTheQuery(t *testing.T) {
 	st := okStore()
 	st.target.DietTags = []string{"vegan"}
 	st.target.ExcludeFoodIDs = []int64{7, 9}
-	h := NewSolveHandler(st, okSolver())
+	h := NewSolveHandler(st, okSolver(), nil)
 
 	if rr := postSolve(t, h, `{"target_id": 1}`); rr.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200", rr.Code)
@@ -166,7 +197,7 @@ func TestSolve_InfeasibleReturns422WithMinBudget(t *testing.T) {
 		MinFeasibleBudgetCents: 4700,
 		Message:                "these macros need at least 4700 cents at this store",
 	}}
-	h := NewSolveHandler(okStore(), sv)
+	h := NewSolveHandler(okStore(), sv, nil)
 
 	rr := postSolve(t, h, `{"target_id": 1}`)
 
@@ -196,7 +227,7 @@ func TestSolve_SolverErrorStatusBecomes500(t *testing.T) {
 		Status:  solverv1.SolveStatus_SOLVE_STATUS_ERROR,
 		Message: "GLOP exploded",
 	}}
-	h := NewSolveHandler(okStore(), sv)
+	h := NewSolveHandler(okStore(), sv, nil)
 
 	if rr := postSolve(t, h, `{"target_id": 1}`); rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d; want 500", rr.Code)
@@ -206,7 +237,7 @@ func TestSolve_SolverErrorStatusBecomes500(t *testing.T) {
 // The solver being unreachable is my problem, not the caller's.
 func TestSolve_TransportFailureBecomes500(t *testing.T) {
 	sv := &fakeSolver{err: errors.New("connection refused")}
-	h := NewSolveHandler(okStore(), sv)
+	h := NewSolveHandler(okStore(), sv, nil)
 
 	if rr := postSolve(t, h, `{"target_id": 1}`); rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d; want 500", rr.Code)
@@ -216,7 +247,7 @@ func TestSolve_TransportFailureBecomes500(t *testing.T) {
 func TestSolve_UnknownTargetReturns404(t *testing.T) {
 	st := okStore()
 	st.targetErr = store.ErrNotFound
-	h := NewSolveHandler(st, okSolver())
+	h := NewSolveHandler(st, okSolver(), nil)
 
 	if rr := postSolve(t, h, `{"target_id": 999}`); rr.Code != http.StatusNotFound {
 		t.Fatalf("status = %d; want 404", rr.Code)
@@ -224,7 +255,7 @@ func TestSolve_UnknownTargetReturns404(t *testing.T) {
 }
 
 func TestSolve_MissingTargetIDReturns422(t *testing.T) {
-	h := NewSolveHandler(okStore(), okSolver())
+	h := NewSolveHandler(okStore(), okSolver(), nil)
 
 	if rr := postSolve(t, h, `{}`); rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d; want 422", rr.Code)
@@ -232,7 +263,7 @@ func TestSolve_MissingTargetIDReturns422(t *testing.T) {
 }
 
 func TestSolve_MalformedJSONReturns400(t *testing.T) {
-	h := NewSolveHandler(okStore(), okSolver())
+	h := NewSolveHandler(okStore(), okSolver(), nil)
 
 	if rr := postSolve(t, h, `{"target_id":`); rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d; want 400", rr.Code)
@@ -244,7 +275,7 @@ func TestSolve_MalformedJSONReturns400(t *testing.T) {
 func TestSolve_NoCandidatesReturns422(t *testing.T) {
 	st := okStore()
 	st.products = nil
-	h := NewSolveHandler(st, okSolver())
+	h := NewSolveHandler(st, okSolver(), nil)
 
 	rr := postSolve(t, h, `{"target_id": 1}`)
 	if rr.Code != http.StatusUnprocessableEntity {
@@ -258,7 +289,7 @@ func TestSolve_NoCandidatesReturns422(t *testing.T) {
 // The Phase 4 switch has to reach the solver.
 func TestSolve_IntegerPacksFlagReachesTheSolver(t *testing.T) {
 	sv := okSolver()
-	h := NewSolveHandler(okStore(), sv)
+	h := NewSolveHandler(okStore(), sv, nil)
 
 	if rr := postSolve(t, h, `{"target_id": 1, "integer_packs": true}`); rr.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200", rr.Code)
@@ -275,12 +306,128 @@ func TestSolve_DeduplicatesFoodIDs(t *testing.T) {
 	st.products = append(st.products,
 		store.Product{ID: 11, FoodID: 1, NetWeightG: 2000, EffectivePriceCents: 900, Available: true})
 	sv := okSolver()
-	h := NewSolveHandler(st, sv)
+	h := NewSolveHandler(st, sv, nil)
 
 	if rr := postSolve(t, h, `{"target_id": 1}`); rr.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200", rr.Code)
 	}
 	if len(sv.got.Products) != 2 {
 		t.Errorf("got %d products; want 2", len(sv.got.Products))
+	}
+}
+
+// ------------------------------------------------------------- cache and audit
+
+// A cache hit must skip the solver entirely — that's the whole point.
+func TestSolve_CacheHitSkipsTheSolver(t *testing.T) {
+	sv := okSolver()
+	cache := &fakeCache{hit: &solverv1.SolveResponse{
+		Status:         solverv1.SolveStatus_SOLVE_STATUS_OPTIMAL,
+		TotalCostCents: 999,
+		Achieved:       &solverv1.MacroTotals{},
+	}}
+	h := NewSolveHandler(okStore(), sv, cache)
+
+	rr := postSolve(t, h, `{"target_id": 1}`)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", rr.Code)
+	}
+	if rr.Header().Get("X-Cache") != "hit" {
+		t.Errorf("X-Cache = %q; want hit", rr.Header().Get("X-Cache"))
+	}
+	// The fake solver records its input; an untouched zero value proves it was
+	// never called.
+	if len(sv.got.Products) != 0 {
+		t.Error("the solver ran despite a cache hit")
+	}
+	if !strings.Contains(rr.Body.String(), "999") {
+		t.Error("the cached response was not returned")
+	}
+}
+
+// A miss must compute AND store, so the next identical request hits.
+func TestSolve_CacheMissComputesAndStores(t *testing.T) {
+	cache := &fakeCache{} // nil hit = miss
+	h := NewSolveHandler(okStore(), okSolver(), cache)
+
+	rr := postSolve(t, h, `{"target_id": 1}`)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", rr.Code)
+	}
+	if rr.Header().Get("X-Cache") != "miss" {
+		t.Errorf("X-Cache = %q; want miss", rr.Header().Get("X-Cache"))
+	}
+	if cache.sets != 1 {
+		t.Errorf("cache.Set called %d times; want 1", cache.sets)
+	}
+}
+
+// A nil cache must be completely harmless — the degraded-Redis path.
+func TestSolve_NilCacheStillWorks(t *testing.T) {
+	h := NewSolveHandler(okStore(), okSolver(), nil)
+
+	if rr := postSolve(t, h, `{"target_id": 1}`); rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200 with no cache", rr.Code)
+	}
+}
+
+// Every solve gets recorded, and the line items come with it.
+func TestSolve_PersistsTheBasket(t *testing.T) {
+	st := okStore()
+	h := NewSolveHandler(st, okSolver(), nil)
+
+	postSolve(t, h, `{"target_id": 1}`)
+
+	if st.savedBasket == nil {
+		t.Fatal("no basket was persisted")
+	}
+	if st.savedBasket.Status != "optimal" {
+		t.Errorf("status = %q; want optimal", st.savedBasket.Status)
+	}
+	if st.savedBasket.TotalCostCents != 2000 {
+		t.Errorf("total = %d; want 2000", st.savedBasket.TotalCostCents)
+	}
+	if len(st.savedItems) != 1 {
+		t.Fatalf("got %d items; want 1", len(st.savedItems))
+	}
+	// 4.0 packs from the fake solver must survive as an integer.
+	if st.savedItems[0].Packs != 4 {
+		t.Errorf("packs = %d; want 4", st.savedItems[0].Packs)
+	}
+}
+
+// An infeasible solve is still worth recording — arguably the most worth it.
+func TestSolve_PersistsInfeasibleSolves(t *testing.T) {
+	st := okStore()
+	sv := &fakeSolver{resp: &solverv1.SolveResponse{
+		Status:                 solverv1.SolveStatus_SOLVE_STATUS_INFEASIBLE,
+		MinFeasibleBudgetCents: 4700,
+		Message:                "needs more money",
+	}}
+	h := NewSolveHandler(st, sv, nil)
+
+	postSolve(t, h, `{"target_id": 1}`)
+
+	if st.savedBasket == nil {
+		t.Fatal("infeasible solves must still be recorded")
+	}
+	if st.savedBasket.Status != "infeasible" {
+		t.Errorf("status = %q; want infeasible", st.savedBasket.Status)
+	}
+	if len(st.savedItems) != 0 {
+		t.Errorf("got %d items; an infeasible basket has none", len(st.savedItems))
+	}
+}
+
+// Losing the audit row must not cost the user their answer.
+func TestSolve_PersistFailureDoesNotFailTheRequest(t *testing.T) {
+	st := okStore()
+	st.saveErr = errors.New("disk on fire")
+	h := NewSolveHandler(st, okSolver(), nil)
+
+	if rr := postSolve(t, h, `{"target_id": 1}`); rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; a persistence failure must not fail the request", rr.Code)
 	}
 }

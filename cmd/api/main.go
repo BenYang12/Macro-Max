@@ -59,7 +59,25 @@ func main() {
 		log.Printf("solver client configured for %s", cfg.SolverAddr)
 	}
 
-	srv := server.New(cfg.Addr(), st, sv)
+	// Redis, for the solve cache. Like the solver, this is NOT fatal: a cache
+	// that can take down the API is worse than no cache at all. If Redis is
+	// unreachable the handler simply computes every solve.
+	cache, err := solver.NewCache(cfg.RedisURL)
+	if err != nil {
+		log.Printf("warning: solve cache unavailable (%v); every solve will be computed", err)
+		cache = nil
+	} else {
+		defer cache.Close()
+		pingCtx, cancelPing := context.WithTimeout(ctx, 2*time.Second)
+		if err := cache.Ping(pingCtx); err != nil {
+			log.Printf("warning: redis ping failed (%v); solves will not be cached", err)
+		} else {
+			log.Printf("solve cache connected to %s", cfg.RedisURL)
+		}
+		cancelPing()
+	}
+
+	srv := server.New(cfg.Addr(), st, sv, cache)
 
 	// ListenAndServe BLOCKS until the server stops, but main must also watch
 	// ctx for the shutdown signal — two things to wait on, so the server

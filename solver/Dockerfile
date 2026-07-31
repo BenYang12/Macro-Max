@@ -32,7 +32,7 @@ RUN uv pip install --system --no-cache \
     "ortools>=9.11" "grpcio>=1.67" "protobuf>=5.29"
 
 COPY gen/ ./gen/
-COPY lp.py server.py ./
+COPY lp.py milp.py server.py ./
 
 EXPOSE 50051
 

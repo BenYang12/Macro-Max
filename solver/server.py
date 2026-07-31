@@ -21,6 +21,7 @@ from concurrent import futures
 import grpc
 
 import lp
+import milp
 from solver.v1 import solver_pb2, solver_pb2_grpc
 
 # gRPC's default listen port convention. I keep it configurable because in
@@ -53,7 +54,8 @@ class SolverService(solver_pb2_grpc.SolverServiceServicer):
     def Solve(self, request, context):
         started = time.monotonic()
         log.info(
-            "solve: %d foods, budget %d cents, targets P%.0f/C%.0f/F%.0f",
+            "solve[%s]: %d foods, budget %d cents, targets P%.0f/C%.0f/F%.0f",
+            "MILP" if request.options.integer_packs else "LP",
             len(request.foods),
             request.budget_cents,
             request.targets.protein_g,
@@ -62,7 +64,14 @@ class SolverService(solver_pb2_grpc.SolverServiceServicer):
         )
 
         try:
-            response = lp.solve(request)
+            # THE PHASE 3 / PHASE 4 SWITCH, and the only place that knows both
+            # models exist. Keeping the dispatch here rather than inside lp.py
+            # avoids a circular import (milp.py reuses lp.py's validation and
+            # ceiling helpers) and keeps each model file focused on its own math.
+            if request.options.integer_packs:
+                response = milp.solve(request)
+            else:
+                response = lp.solve(request)
         except Exception as exc:  # noqa: BLE001 - deliberate catch-all, see below
             # A bare except is usually bad practice, but this is a SERVER
             # boundary. If lp.solve() raises something I didn't anticipate, the

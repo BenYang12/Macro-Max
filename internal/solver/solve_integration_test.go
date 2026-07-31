@@ -300,3 +300,168 @@ func TestE2E_LPBuysFractionalPacks(t *testing.T) {
 		t.Log("no fractional packs this run — possible, but Phase 4's integer constraint is still needed in general")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// PHASE 4 — the same catalog, the same targets, the MILP switched on.
+//
+// The test below is the mirror image of TestE2E_StiglerBasketIsDegenerate. That
+// one asserts the basket is 3 joyless foods with no produce; this one asserts
+// >=3 protein sources, >=2 vegetables, >=1 fruit, whole packs, and no single
+// food dominating the calories. Running both against identical inputs is the
+// clearest evidence I have that Phase 4 did what it claimed.
+// ---------------------------------------------------------------------------
+
+// milpTarget is the same realistic cut as the LP test, with a budget that has
+// room for variety. Variety costs money — that's the trade Phase 4 makes, and
+// the budget has to acknowledge it.
+func milpTarget() store.UserTarget {
+	t := realisticTarget()
+	t.BudgetCentsWeekly = 12000 // $120/week
+	return t
+}
+
+func TestE2E_MILPProducesAnEdibleBasket(t *testing.T) {
+	st, cl := newE2E(t)
+	products, foods := loadCatalog(t, st)
+
+	resp, err := cl.Solve(context.Background(), SolveInput{
+		Target:       milpTarget(),
+		Products:     products,
+		Foods:        foods,
+		IntegerPacks: true, // THE switch
+	})
+	if err != nil {
+		t.Fatalf("solve: %v", err)
+	}
+
+	if resp.Status != solverv1.SolveStatus_SOLVE_STATUS_OPTIMAL &&
+		resp.Status != solverv1.SolveStatus_SOLVE_STATUS_FEASIBLE {
+		t.Fatalf("status = %v; want OPTIMAL or FEASIBLE. message: %s", resp.Status, resp.Message)
+	}
+
+	// Group the answer by category so I can check the variety claims.
+	byCategory := map[string]map[int64]bool{}
+	byFood := map[int64]float64{} // food id -> kcal contributed
+	var names []string
+
+	for _, it := range resp.Items {
+		var prod *store.Product
+		for i := range products {
+			if products[i].ID == it.ProductId {
+				prod = &products[i]
+				break
+			}
+		}
+		if prod == nil {
+			t.Fatalf("solver returned product %d, which I never sent", it.ProductId)
+		}
+		f := foods[prod.FoodID]
+
+		if byCategory[f.Category] == nil {
+			byCategory[f.Category] = map[int64]bool{}
+		}
+		byCategory[f.Category][f.ID] = true
+		byFood[f.ID] += (f.KcalPer100g / 100) * it.Grams
+		names = append(names, it.FoodName)
+	}
+
+	t.Logf("MILP basket (%d items, %d cents, %.3fs): %v",
+		len(resp.Items), resp.TotalCostCents, resp.SolveSeconds, names)
+
+	// --- The Phase 4 exit criteria, straight from my plan ---
+
+	if n := len(byCategory["protein"]); n < 3 {
+		t.Errorf("protein sources = %d; want >= 3", n)
+	}
+	if n := len(byCategory["vegetable"]); n < 2 {
+		t.Errorf("vegetables = %d; want >= 2", n)
+	}
+	if n := len(byCategory["fruit"]); n < 1 {
+		t.Errorf("fruits = %d; want >= 1", n)
+	}
+
+	// No food over 30% of the calorie ceiling. The ceiling is derived as
+	// 1.1 x Atwater when unset: 1.1 x (4*1260 + 4*1400 + 9*420) = 15862 kcal.
+	ceiling := 1.1 * (4*1260.0 + 4*1400.0 + 9*420.0)
+	cap := 0.30 * ceiling
+	for foodID, kcal := range byFood {
+		if kcal > cap+1 {
+			t.Errorf("food %d supplies %.0f kcal, over the %.0f cap (30%%)", foodID, kcal, cap)
+		}
+	}
+
+	// Whole packs — the dishonesty Phase 3 had.
+	for _, it := range resp.Items {
+		if it.Packs != float64(int64(it.Packs)) {
+			t.Errorf("%q: %v packs is not a whole number", it.ProductName, it.Packs)
+		}
+	}
+
+	// Still a correct answer: macros met, budget respected.
+	if resp.Achieved.ProteinG < 1260-0.01 {
+		t.Errorf("protein = %.1f; want >= 1260", resp.Achieved.ProteinG)
+	}
+	if resp.TotalCostCents > 12000 {
+		t.Errorf("cost %d exceeds the budget", resp.TotalCostCents)
+	}
+}
+
+// The other Phase 4 exit criterion: an impossible budget must come back with a
+// real number, now computed against the FULL model including variety.
+func TestE2E_MILPInfeasibleBudgetReportsMinimum(t *testing.T) {
+	st, cl := newE2E(t)
+	products, foods := loadCatalog(t, st)
+
+	target := milpTarget()
+	target.BudgetCentsWeekly = 500
+
+	resp, err := cl.Solve(context.Background(), SolveInput{
+		Target: target, Products: products, Foods: foods, IntegerPacks: true,
+	})
+	if err != nil {
+		t.Fatalf("solve: %v", err)
+	}
+
+	if resp.Status != solverv1.SolveStatus_SOLVE_STATUS_INFEASIBLE {
+		t.Fatalf("status = %v; want INFEASIBLE", resp.Status)
+	}
+	if resp.MinFeasibleBudgetCents <= 500 {
+		t.Errorf("min feasible = %d; should exceed the rejected 500",
+			resp.MinFeasibleBudgetCents)
+	}
+	t.Logf("MILP infeasible at 500c; needs %d cents (~$%.2f/week): %s",
+		resp.MinFeasibleBudgetCents,
+		float64(resp.MinFeasibleBudgetCents)/100, resp.Message)
+}
+
+// Side by side: the same target solved both ways. This is the comparison I'd
+// put in the README, and running it as a test means it can't rot.
+func TestE2E_MILPvsLPComparison(t *testing.T) {
+	st, cl := newE2E(t)
+	products, foods := loadCatalog(t, st)
+	ctx := context.Background()
+
+	lp, err := cl.Solve(ctx, SolveInput{Target: milpTarget(), Products: products, Foods: foods})
+	if err != nil {
+		t.Fatalf("lp solve: %v", err)
+	}
+	mi, err := cl.Solve(ctx, SolveInput{
+		Target: milpTarget(), Products: products, Foods: foods, IntegerPacks: true,
+	})
+	if err != nil {
+		t.Fatalf("milp solve: %v", err)
+	}
+
+	t.Logf("LP:   %d foods, %d cents, %.3fs", len(lp.Items), lp.TotalCostCents, lp.SolveSeconds)
+	t.Logf("MILP: %d foods, %d cents, %.3fs", len(mi.Items), mi.TotalCostCents, mi.SolveSeconds)
+
+	// Variety is not free, and I want that cost visible rather than hidden.
+	if mi.TotalCostCents < lp.TotalCostCents {
+		t.Logf("NOTE: the MILP came out cheaper (%d < %d), which is unexpected",
+			mi.TotalCostCents, lp.TotalCostCents)
+	}
+	if len(mi.Items) <= len(lp.Items) {
+		t.Errorf("MILP basket (%d items) should be more varied than the LP's (%d)",
+			len(mi.Items), len(lp.Items))
+	}
+}

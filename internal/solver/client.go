@@ -42,6 +42,29 @@ const (
 	milpTimeout = 30 * time.Second
 )
 
+// Phase 4 variety defaults.
+//
+// WHY THESE LIVE IN GO AND NOT IN THE SOLVER: they are PRODUCT decisions, not
+// math. "A week's groceries should include at least two vegetables" is a claim
+// about what makes a basket cookable, and it belongs next to the rest of my
+// product logic where I can see and change it. The solver's job is to satisfy
+// whatever floors it's handed, not to have opinions about nutrition.
+//
+// Contrast with min_portion_grams and diversity_lambda, whose defaults DO live
+// in Python: those are modeling parameters that only mean something inside the
+// optimization, and the solver is the right place to know what a sane value is.
+//
+// Note also that 0 means OFF for these three, not "use a default" — unlike the
+// solver-side options. That asymmetry is deliberate: a user may legitimately
+// want no vegetable requirement, so I need to be able to express zero. It does
+// mean the caller must opt IN to variety, which is why these constants get
+// applied explicitly below rather than being assumed by the solver.
+const (
+	defaultMinProteinSources = 3
+	defaultMinVegetables     = 2
+	defaultMinFruits         = 1
+)
+
 // Client wraps the generated gRPC stub.
 //
 // The generated SolverServiceClient is an interface, which is convenient: my
@@ -100,6 +123,18 @@ type SolveInput struct {
 
 	// IntegerPacks switches on the Phase 4 MILP. Phase 3 leaves it false.
 	IntegerPacks bool
+
+	// Variety floors. All ignored unless IntegerPacks is true, because they
+	// need the binary "is this food used" variables only the MILP has.
+	//
+	// A nil pointer means "use my default"; a non-nil pointer (including one
+	// pointing at 0) means "the caller decided". This is the same three-state
+	// pointer trick as my nullable database columns, and I need it for the same
+	// reason: 0 is a meaningful value here ("no vegetable requirement"), so it
+	// cannot double as the absent marker.
+	MinProteinSources *int32
+	MinVegetables     *int32
+	MinFruits         *int32
 }
 
 // Solve converts, calls, and returns the raw response.
@@ -204,12 +239,29 @@ func BuildRequest(in SolveInput) (*solverv1.SolveRequest, error) {
 	// defines as "derive one" — not "unlimited". That sentinel is documented
 	// in the proto and honored in lp.py.
 
+	opts := &solverv1.SolveOptions{IntegerPacks: in.IntegerPacks}
+
+	// The variety floors only mean anything to the MILP. Sending them with the
+	// LP would be harmless (it ignores them) but misleading to anyone reading a
+	// logged request, so I leave them at zero for Phase 3 solves.
+	if in.IntegerPacks {
+		opts.MinProteinSources = orDefaultInt32(in.MinProteinSources, defaultMinProteinSources)
+		opts.MinVegetables = orDefaultInt32(in.MinVegetables, defaultMinVegetables)
+		opts.MinFruits = orDefaultInt32(in.MinFruits, defaultMinFruits)
+	}
+
 	return &solverv1.SolveRequest{
 		Targets:     targets,
 		BudgetCents: int64(t.BudgetCentsWeekly),
 		Foods:       foods,
-		Options: &solverv1.SolveOptions{
-			IntegerPacks: in.IntegerPacks,
-		},
+		Options:     opts,
 	}, nil
+}
+
+// orDefaultInt32 resolves the nil-means-default pointer convention above.
+func orDefaultInt32(v *int32, fallback int32) int32 {
+	if v == nil {
+		return fallback
+	}
+	return *v
 }
