@@ -51,6 +51,19 @@ type Config struct {
 	// DATABASE_URL. In Compose this becomes "solver:50051" (the service name is
 	// the hostname on a Docker network); on Fly it becomes a .internal address.
 	SolverAddr string
+
+	// Kroger developer app credentials (Phase 5), used only by
+	// cmd/krogeringest. Secrets, so no defaults — same rule as FDCAPIKey.
+	KrogerClientID     string
+	KrogerClientSecret string
+
+	// KrogerZip is the default zip for store lookup. NOT a secret, so it gets a
+	// default; override in .env with the store I actually shop at.
+	KrogerZip string
+
+	// KrogerLocationID is the resolved store to solve against. Empty until I've
+	// run `krogeringest -zip` once and picked one.
+	KrogerLocationID string
 }
 
 // http.Server is a struct in Go's built-in net/http package that a program that listens for web requests from clients (like a browser) and sends back responses
@@ -94,6 +107,16 @@ func LoadFromEnv() (Config, error) {
 		// when unset, which is exactly the "absent" value cmd/fdcimport checks.
 		FDCAPIKey:  os.Getenv("FDC_API_KEY"),
 		SolverAddr: envOr("SOLVER_ADDR", "localhost:50051"),
+
+		KrogerClientID:     os.Getenv("KROGER_CLIENT_ID"),
+		KrogerClientSecret: os.Getenv("KROGER_CLIENT_SECRET"),
+		// Chapel Hill, NC — my campus. The nearby stores are Harris Teeter,
+		// which Kroger owns; see the note in .env.example about why that's
+		// worth verifying rather than assuming.
+		KrogerZip: envOr("KROGER_ZIP", "27514"),
+		// Harris Teeter Chapel Hill North. Verified to return live prices
+		// through the Kroger API; see the note in .env.example.
+		KrogerLocationID: envOr("KROGER_LOCATION_ID", "09700223"),
 	}
 
 	// recall: I need to validate the port
