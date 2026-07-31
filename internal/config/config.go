@@ -44,6 +44,13 @@ type Config struct {
 	// are used, not where they are loaded — otherwise `make run` would refuse
 	// to start the API over a key the API never touches.
 	FDCAPIKey string
+
+	// SolverAddr is host:port of the Python OR-Tools gRPC service (Phase 3).
+	// Unlike the API key this DOES get a default, because it isn't a secret and
+	// there is one obviously-right local value — the same reasoning as
+	// DATABASE_URL. In Compose this becomes "solver:50051" (the service name is
+	// the hostname on a Docker network); on Fly it becomes a .internal address.
+	SolverAddr string
 }
 
 // http.Server is a struct in Go's built-in net/http package that a program that listens for web requests from clients (like a browser) and sends back responses
@@ -85,7 +92,8 @@ func LoadFromEnv() (Config, error) {
 
 		// No fallback: a secret has no sensible default. os.Getenv returns ""
 		// when unset, which is exactly the "absent" value cmd/fdcimport checks.
-		FDCAPIKey: os.Getenv("FDC_API_KEY"),
+		FDCAPIKey:  os.Getenv("FDC_API_KEY"),
+		SolverAddr: envOr("SOLVER_ADDR", "localhost:50051"),
 	}
 
 	// recall: I need to validate the port

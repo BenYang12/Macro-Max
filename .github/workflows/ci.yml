@@ -75,9 +75,10 @@ jobs:
           # it here. One source of truth — bumping go.mod bumps CI too, and the
           # two can never silently disagree.
           #
-          # Caveat worth knowing: go.mod pins an exact patch (go 1.26.4), so CI
-          # requires that exact release to exist. If setup-go ever fails to
-          # find it, relax go.mod to `go 1.26`.
+          # go.mod says `go 1.26` (minor, not an exact patch). I relaxed that
+          # from 1.26.4 after installing buf pulled Go 1.26.5 via brew and my
+          # local toolchain drifted ahead of the pin. An exact-patch pin buys
+          # nothing here and breaks the moment any machine updates.
           go-version-file: go.mod
           # Cache the module download and build cache between runs.
           cache: true
@@ -151,3 +152,35 @@ jobs:
         run: |
           migrate -path migrations -database "$DATABASE_URL" down -all
           migrate -path migrations -database "$DATABASE_URL" up
+
+  # Python solver job (Phase 3). SEPARATE from the Go job on purpose: they share
+  # no dependencies, so running them in parallel halves wall-clock CI time, and a
+  # Python failure reports as its own red X instead of hiding inside the Go job.
+  solver:
+    name: Solver (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Every step below runs inside solver/, so I don't repeat `cd solver`.
+        working-directory: solver
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv pip install --system ortools grpcio protobuf pytest
+
+      - name: Test
+        # The whole pytest suite is pure — no gRPC server, no database — so
+        # unlike the Go job this needs no service containers at all. That's the
+        # payoff of keeping lp.py free of I/O.
+        run: PYTHONPATH=.:gen python -m pytest -q

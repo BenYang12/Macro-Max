@@ -131,3 +131,127 @@ func (s *Store) GetProduct(ctx context.Context, id int64) (Product, error) {
 
 	return p, nil
 }
+
+// ListSolveCandidates loads every product a solve should consider at one store,
+// respecting the target's diet filters and exclusions.
+//
+// Why this is its OWN query rather than reusing ListProducts: the solver needs
+// filtering that the public products endpoint has no business doing (diet tags,
+// excluded food ids), and it needs only AVAILABLE products. Bolting four more
+// optional parameters onto ListProducts would make a general-purpose function
+// serve one specialized caller badly. A second query is cheaper than a
+// confusing first one.
+func (s *Store) ListSolveCandidates(ctx context.Context, storeID string, dietTags []string, excludeFoodIDs []int64) ([]Product, error) {
+	// The two new filter idioms here:
+	//
+	//   f.tags @> $2   — the food must carry EVERY tag the user requires. This
+	//                    is the same containment operator as the tag filter on
+	//                    /v1/foods, but with a multi-element right side, so it
+	//                    means "superset of", which is exactly what a diet
+	//                    filter is: vegan AND gluten_free, not either.
+	//
+	//   NOT (f.id = ANY($3)) — exclusion. ANY() compares a scalar against every
+	//                    element of an array. An empty array makes this
+	//                    trivially true, so "no exclusions" needs no special
+	//                    case in the Go code.
+	query := `
+		SELECT p.id, p.food_id, p.store_id, p.external_id,
+		       p.name, p.brand,
+		       p.pack_size_qty, p.pack_size_unit, p.net_weight_g,
+		       p.price_cents, p.promo_price_cents,
+		       COALESCE(p.promo_price_cents, p.price_cents) AS effective_price_cents,
+		       p.available, p.fetched_at,
+		       f.name AS food_name
+		FROM products p
+		JOIN foods f ON f.id = p.food_id
+		WHERE p.store_id = $1
+		  AND p.available = TRUE
+		  AND p.net_weight_g > 0
+		  AND COALESCE(p.promo_price_cents, p.price_cents) > 0
+		  AND f.tags @> $2
+		  AND NOT (f.id = ANY($3))
+		ORDER BY f.name, p.net_weight_g`
+
+	// pgx maps a nil slice to SQL NULL, and `tags @> NULL` is NULL (not true),
+	// which would silently return zero rows. Normalizing nil to an empty array
+	// keeps "no filter" meaning "no filter".
+	if dietTags == nil {
+		dietTags = []string{}
+	}
+	if excludeFoodIDs == nil {
+		excludeFoodIDs = []int64{}
+	}
+
+	rows, err := s.Pool.Query(ctx, query, storeID, dietTags, excludeFoodIDs)
+	if err != nil {
+		return nil, fmt.Errorf("querying solve candidates: %w", err)
+	}
+	defer rows.Close()
+
+	products := []Product{}
+	for rows.Next() {
+		var p Product
+		err := rows.Scan(
+			&p.ID, &p.FoodID, &p.StoreID, &p.ExternalID,
+			&p.Name, &p.Brand,
+			&p.PackSizeQty, &p.PackSizeUnit, &p.NetWeightG,
+			&p.PriceCents, &p.PromoPriceCents,
+			&p.EffectivePriceCents,
+			&p.Available, &p.FetchedAt,
+			&p.FoodName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning solve candidate: %w", err)
+		}
+		products = append(products, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating solve candidates: %w", err)
+	}
+	return products, nil
+}
+
+// ListFoodsByIDs loads the foods backing a set of products, keyed by id.
+//
+// I return a MAP rather than a slice because the caller's next move is always
+// "given this product's food_id, what's its nutrition?" — a lookup, not a scan.
+// Returning a slice would force every caller to build this map themselves.
+func (s *Store) ListFoodsByIDs(ctx context.Context, ids []int64) (map[int64]Food, error) {
+	if len(ids) == 0 {
+		return map[int64]Food{}, nil
+	}
+
+	// = ANY($1) with an array parameter, rather than building an IN (...) list
+	// with N placeholders. One static query string for any number of ids, and
+	// no string concatenation anywhere near user input.
+	query := `
+		SELECT id, name, fdc_id, category, tags,
+		       kcal_per_100g, protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+		       max_grams_per_week, created_at, updated_at
+		FROM foods
+		WHERE id = ANY($1)`
+
+	rows, err := s.Pool.Query(ctx, query, ids)
+	if err != nil {
+		return nil, fmt.Errorf("querying foods by id: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64]Food, len(ids))
+	for rows.Next() {
+		var f Food
+		err := rows.Scan(
+			&f.ID, &f.Name, &f.FdcID, &f.Category, &f.Tags,
+			&f.KcalPer100g, &f.ProteinGPer100g, &f.CarbsGPer100g, &f.FatGPer100g,
+			&f.MaxGramsPerWeek, &f.CreatedAt, &f.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning food: %w", err)
+		}
+		out[f.ID] = f
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating foods: %w", err)
+	}
+	return out, nil
+}

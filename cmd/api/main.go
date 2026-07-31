@@ -15,6 +15,7 @@ import (
 
 	"github.com/BenYang12/Macro-Max/internal/config"
 	"github.com/BenYang12/Macro-Max/internal/server"
+	"github.com/BenYang12/Macro-Max/internal/solver"
 	"github.com/BenYang12/Macro-Max/internal/store"
 )
 
@@ -42,7 +43,23 @@ func main() {
 	defer st.Close()
 	log.Println("connected to database")
 
-	srv := server.New(cfg.Addr(), st)
+	// Dial the solver. grpc.NewClient does NOT connect — it sets up a managed
+	// channel that connects lazily and reconnects on its own. So an error here
+	// means the ADDRESS is malformed, not that the solver is down.
+	//
+	// I deliberately do not treat this as fatal. Without Postgres nothing
+	// works, so that one is log.Fatal; without the solver only /v1/solve is
+	// affected, so I log a warning and carry on serving everything else.
+	sv, err := solver.New(cfg.SolverAddr)
+	if err != nil {
+		log.Printf("warning: solver client unavailable (%v); /v1/solve will not be registered", err)
+		sv = nil
+	} else {
+		defer sv.Close()
+		log.Printf("solver client configured for %s", cfg.SolverAddr)
+	}
+
+	srv := server.New(cfg.Addr(), st, sv)
 
 	// ListenAndServe BLOCKS until the server stops, but main must also watch
 	// ctx for the shutdown signal — two things to wait on, so the server

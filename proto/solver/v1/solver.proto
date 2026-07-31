@@ -1,0 +1,250 @@
+// This file is the CONTRACT between my Go API and my Python solver.
+//
+// Up to now every piece of this project has been Go talking to Go, where the
+// compiler checks my types for me. That stops working the moment a second
+// language enters. So instead of trusting two codebases to agree by hand, I
+// write the shape ONCE here, and generate both the Go and the Python types
+// from it. If I change a field name, both sides stop compiling until I fix
+// them. That's the whole reason protobuf exists, and it's why I'm paying the
+// toolchain cost of buf + codegen rather than just sending JSON over HTTP.
+//
+// The other reason I'm choosing gRPC over a JSON endpoint: this call is
+// internal, chatty, and latency-sensitive (I'll send ~50 foods and wait on a
+// solve). gRPC gives me binary encoding, HTTP/2 multiplexing, and generated
+// clients with real types. For my PUBLIC API I keep JSON, because that's what
+// browsers speak. Different boundary, different tool.
+
+syntax = "proto3";
+
+// The package name is versioned from day one: solver.v1. When I inevitably
+// need a breaking change, I add solver/v2/ alongside instead of mutating this
+// file out from under a running service. Versioning after the fact is painful;
+// versioning up front costs nothing.
+package solver.v1;
+
+// go_package tells protoc-gen-go which Go import path the generated code
+// belongs to. It must match where the files actually land, or my imports break.
+option go_package = "github.com/BenYang12/Macro-Max/internal/gen/solver/v1;solverv1";
+
+// SolverService is the only service here. One RPC for now; Phase 4 reuses this
+// exact signature and just flips options.integer_packs to true, which is
+// deliberate — I want the MILP upgrade to be a solver-side change, not a new
+// contract.
+service SolverService {
+  rpc Solve(SolveRequest) returns (SolveResponse);
+}
+
+// ---------------------------------------------------------------------------
+// UNITS — the part I have to get right or everything downstream is silently
+// wrong. I'm writing these down here because this file is the boundary where
+// my Go conventions have to be restated for a Python program that has never
+// read my CLAUDE.md.
+//
+//   Money   -> int64 CENTS. Never a float. Same law as everywhere else in
+//              this project.
+//   Mass    -> double GRAMS.
+//   Macros  -> double PER GRAM, not per 100g. My database stores per-100g
+//              (because that's how USDA publishes), and my Go code divides by
+//              100 exactly once, right before filling in this message. The
+//              solver must never see the number 100 — if it did, I'd have two
+//              places that know about the conversion, and eventually they'd
+//              disagree.
+//   Period  -> WEEKLY totals. My users enter daily targets; my Go handler
+//              multiplies by 7 before it gets here. The solver has no concept
+//              of a day.
+// ---------------------------------------------------------------------------
+
+// MacroTargets are WEEKLY totals the basket must satisfy.
+message MacroTargets {
+  // Lower bounds: the basket must supply AT LEAST this much. I deliberately
+  // chose >= rather than == because equality constraints make an LP brittle —
+  // demanding exactly 1120g of protein when foods come in discrete packs can
+  // easily be infeasible, and "you got 1135g instead of 1120g" is not a
+  // problem any human cares about.
+  double protein_g = 1;
+  double carbs_g = 2;
+  double fat_g = 3;
+
+  // Upper bound: the basket must supply AT MOST this many calories. This is
+  // the constraint that stops the solver from answering "just buy 10kg of oil"
+  // when oil is the cheapest way to hit fat targets.
+  //
+  // 0 means "no explicit ceiling — derive one". The solver then uses
+  // 1.1 x (4*protein + 4*carbs + 9*fat), i.e. the Atwater energy the macros
+  // themselves imply, plus 10% slack. I encode "absent" as 0 rather than using
+  // optional because a calorie ceiling of exactly zero is meaningless anyway,
+  // so 0 is a safe sentinel here in a way it wouldn't be for, say, a price.
+  double calories_max = 4;
+}
+
+// MacroTotals is what the basket ACTUALLY achieved. Same units as targets, so
+// I can compare them field by field in the frontend later.
+message MacroTotals {
+  double protein_g = 1;
+  double carbs_g = 2;
+  double fat_g = 3;
+  double calories = 4;
+}
+
+// Food is one purchasable option the solver may choose from. Note this is a
+// flattened join of my foods and products tables — the solver doesn't need my
+// schema, it needs numbers.
+message Food {
+  // Which PRODUCT this is (a specific pack at a specific store). The solver
+  // echoes this back so I can map its answer to real rows.
+  int64 product_id = 1;
+
+  // Which generic FOOD this product supplies. This one is subtle and important:
+  // variety constraints count DISTINCT FOODS, not products. Buying a 2lb bag
+  // and a 10lb bag of the same rice is one food, not two. Without this field
+  // the Phase 4 MILP would think it had achieved variety by buying the same
+  // thing twice, which is exactly the kind of gaming I'm building constraints
+  // to prevent.
+  int64 food_id = 2;
+
+  // 'protein' | 'carb' | 'fat' | 'vegetable' | 'fruit' | 'dairy' | 'pantry'.
+  // A string rather than an enum because the set lives in a Postgres CHECK
+  // constraint that I change more often than I'd want to redeploy the solver.
+  string category = 3;
+
+  // Nutrition PER GRAM. See the units block above.
+  double protein_per_g = 4;
+  double carbs_per_g = 5;
+  double fat_per_g = 6;
+  double kcal_per_g = 7;
+
+  // One pack: how much food it contains, and what it costs.
+  double pack_grams = 8;
+  int64 pack_price_cents = 9;
+
+  // Palatability cap in grams per week, from foods.max_grams_per_week.
+  // 0 means uncapped. This is what stops "eat 4kg of whey this week" from
+  // being a valid answer.
+  double max_grams_week = 10;
+
+  // Human-readable, for debugging and for the response. The solver ignores
+  // these, but when a solve returns something baffling I want to read names,
+  // not ids.
+  string food_name = 11;
+  string product_name = 12;
+}
+
+// SolveOptions are the knobs. Everything here has a sane zero value so that an
+// empty SolveOptions{} is a valid Phase 3 LP request — I want the simple case
+// to require no configuration.
+message SolveOptions {
+  // false (the zero value) = Phase 3 behavior: continuous grams, no packs.
+  // true = Phase 4 MILP: integer pack counts.
+  //
+  // This single flag is the entire Phase 3 -> Phase 4 upgrade path from the
+  // client's point of view.
+  bool integer_packs = 1;
+
+  // Variety floors. All ignored when integer_packs is false, because they need
+  // the binary "is this food meaningfully used" variables that only the MILP
+  // has. I'm defining them now so the contract doesn't churn in Phase 4.
+  int32 min_protein_sources = 2;
+  int32 min_vegetables = 3;
+  int32 min_fruits = 4;
+
+  // A food only COUNTS toward the variety floors if the basket contains at
+  // least this many grams of it per week. Without this, the solver satisfies
+  // "3 protein sources" by buying 1 gram of two extra proteins. 0 -> solver
+  // default of 200g.
+  double min_portion_grams = 5;
+
+  // Cost (in cents per gram) added to the objective for every gram of a food
+  // beyond its concentration threshold. This is the soft monotony tax: bulk
+  // staples stay legal, but eating 3kg of rice costs the objective something.
+  // 0 -> solver default of 0.05.
+  double diversity_lambda = 6;
+
+  // No single food may supply more than this fraction of total calories.
+  // 0 -> solver default of 0.30.
+  double max_kcal_share_per_food = 7;
+
+  // Wall-clock budget for the solve. 0 -> solver default. I set this LOWER
+  // than my gRPC deadline on purpose: I'd much rather the solver stop early
+  // and hand me a FEASIBLE answer than have my client time out and get nothing
+  // at all.
+  double time_limit_seconds = 8;
+}
+
+message SolveRequest {
+  MacroTargets targets = 1;
+
+  // Weekly budget in cents. A hard upper bound on total spend.
+  int64 budget_cents = 2;
+
+  repeated Food foods = 3;
+
+  SolveOptions options = 4;
+}
+
+// Status is an enum, not a string, so a typo is a compile error on both sides.
+enum SolveStatus {
+  // proto3 requires the zero value to be the "unspecified" case. This is a
+  // real convention with a real payoff: an unset field and an explicit
+  // "unknown" become the same thing, so I can never mistake a
+  // default-constructed message for a meaningful answer.
+  SOLVE_STATUS_UNSPECIFIED = 0;
+
+  // Proven optimal — no cheaper basket satisfies every constraint. This is the
+  // word "provably" in my project pitch, and it's the thing an LLM
+  // fundamentally cannot give me.
+  SOLVE_STATUS_OPTIMAL = 1;
+
+  // A valid basket, but the solver ran out of time before proving it optimal.
+  // Still useful; just not a guarantee.
+  SOLVE_STATUS_FEASIBLE = 2;
+
+  // No basket satisfies the constraints. Not an error — a legitimate,
+  // informative answer that usually means "your budget is too low".
+  SOLVE_STATUS_INFEASIBLE = 3;
+
+  // The solver itself broke. This IS an error.
+  SOLVE_STATUS_ERROR = 4;
+}
+
+// BasketItem is one line of the answer.
+message BasketItem {
+  int64 product_id = 1;
+
+  // How many packs to buy. In Phase 3's LP this is fractional and physically
+  // meaningless (you can't buy 2.4 bags of rice) — that dishonesty is exactly
+  // what Phase 4's integer variables fix, and I'm leaving it visible rather
+  // than rounding it away so the difference is obvious when I get there.
+  double packs = 2;
+
+  // How many grams to actually EAT. In Phase 4 this can be less than what I
+  // bought (packs x pack_grams), and the difference is leftovers.
+  double grams = 3;
+
+  // What this line costs, in cents. I compute it from integer prices rather
+  // than reading the solver's float objective, so the total is exact.
+  int64 cost_cents = 4;
+
+  string food_name = 5;
+  string product_name = 6;
+}
+
+message SolveResponse {
+  SolveStatus status = 1;
+  repeated BasketItem items = 2;
+  int64 total_cost_cents = 3;
+  MacroTotals achieved = 4;
+
+  // When status is INFEASIBLE, this is the punchline: the cheapest budget that
+  // WOULD work. Telling a user "impossible" is useless; telling them "your
+  // macros need at least $47 at this store" is the single most valuable thing
+  // this whole project can say. 0 when not applicable or not computed.
+  int64 min_feasible_budget_cents = 5;
+
+  // Human-readable explanation, especially for INFEASIBLE and ERROR.
+  string message = 6;
+
+  // How long the solve took. I want this in the response, not just in logs,
+  // because it's the number that tells me when Phase 4's model has grown too
+  // slow to ship.
+  double solve_seconds = 7;
+}

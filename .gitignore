@@ -5,3 +5,4 @@ docs/PLAN.md
 
 # Local environment variables (real secrets live here; .env.example is committed)
 .env
+.venv

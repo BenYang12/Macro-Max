@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: macrocart-solver
+Version: 0.1.0
+Summary: OR-Tools LP/MILP solver microservice for MacroCart
+Requires-Python: >=3.11
+Requires-Dist: ortools>=9.11
+Requires-Dist: grpcio>=1.67
+Requires-Dist: protobuf>=5.29

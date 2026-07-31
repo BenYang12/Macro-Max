@@ -55,6 +55,36 @@ services:
       timeout: 3s
       retries: 10
 
+
+  # The Python OR-Tools solver (Phase 3).
+  #
+  # Unlike Postgres and Redis this one is built from my own source, so it has a
+  # `build:` rather than an `image:`. `make up` rebuilds it when the Dockerfile
+  # or its context changes.
+  solver:
+    build:
+      context: ./solver
+    ports:
+      # Published to the host so my Go API — which runs on the host, not in
+      # Compose — can reach it at localhost:50051. Once the API is containerized
+      # in Phase 7 this mapping becomes unnecessary and the two talk over the
+      # Compose network directly.
+      - "50051:50051"
+    healthcheck:
+      # There is no curl in a slim Python image and gRPC doesn't speak plain
+      # HTTP anyway, so I check the thing that actually matters: is something
+      # accepting TCP connections on the port? Python's socket module is already
+      # present, which keeps the image small.
+      test: ["CMD", "python", "-c",
+             "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('localhost',50051)))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+
+
   # Top-level declaration of named volumes referenced above. Docker creates and
   # manages them; `docker volume ls` shows them.
 volumes:

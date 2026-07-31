@@ -20,7 +20,7 @@ DATABASE_URL ?= postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=
 # .PHONY tells make these targets are commands, not files it should build.
 # Without it, creating a file literally named "test" would break `make test`
 # (make would see the file exists and say "nothing to do").
-.PHONY: run test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry
+.PHONY: run test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry proto solver-test solver-up solver-logs solver-shell
 
 ## Development loop
 
@@ -94,3 +94,25 @@ fdc-import:     # apply the curated mapping in cmd/fdcimport/mapping.go
 
 fdc-dry:        # same as fdc-import but writes nothing — always run this first
 	go run ./cmd/fdcimport -all -dry-run
+
+## Solver (Phase 3) — Python OR-Tools over gRPC
+
+proto:          # regenerate Go AND Python stubs from proto/solver/v1/solver.proto.
+                # Both languages come out of ONE command, which is the whole
+                # reason I'm using buf: they can never drift because I forgot to
+                # rerun one of them. Generated code IS committed, so a fresh
+                # clone builds without needing buf installed.
+	buf lint
+	PATH="$$PATH:$$(go env GOPATH)/bin" buf generate
+
+solver-test:    # pytest against the pure LP — no gRPC, no database, fast
+	cd solver && uv run pytest -q
+
+solver-up:      # build and start just the solver container
+	docker compose up -d --build solver
+
+solver-logs:    # tail the solver's logs (every solve logs its status and timing)
+	docker compose logs -f solver
+
+solver-shell:   # a shell inside the solver container, for poking at imports
+	docker compose exec solver /bin/sh

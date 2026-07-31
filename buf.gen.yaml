@@ -1,0 +1,34 @@
+# This file says WHERE generated code goes and WHICH plugins produce it.
+# `buf generate` reads it and writes stubs for both languages in one command.
+version: v2
+
+# Managed mode lets buf inject file options (like go_package) rather than
+# requiring them in the .proto. I've set go_package explicitly in the proto
+# anyway, because I'd rather the contract file be self-describing than have the
+# Go import path live in a build config a reader might not open.
+managed:
+  enabled: false
+
+plugins:
+  # ---- Go ----
+  # protoc-gen-go generates the message STRUCTS (marshal/unmarshal, getters).
+  - local: protoc-gen-go
+    out: internal/gen
+    opt: paths=source_relative
+
+  # protoc-gen-go-grpc generates the SERVICE code: the client I call and the
+  # server interface I'd implement. These are two separate plugins because
+  # messages and services are genuinely separable — plenty of protos define
+  # messages with no service at all.
+  - local: protoc-gen-go-grpc
+    out: internal/gen
+    opt: paths=source_relative
+
+  # ---- Python ----
+  # Remote plugins: buf runs these on the Buf Schema Registry, so I don't have
+  # to install Python protoc plugins locally. Pinned to exact versions so my
+  # generated code doesn't silently change when upstream releases.
+  - remote: buf.build/protocolbuffers/python:v29.3
+    out: solver/gen
+  - remote: buf.build/grpc/python:v1.67.0
+    out: solver/gen

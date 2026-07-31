@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/BenYang12/Macro-Max/internal/handler"
+	"github.com/BenYang12/Macro-Max/internal/solver"
 	"github.com/BenYang12/Macro-Max/internal/store"
 )
 
@@ -13,7 +14,11 @@ import (
 // still doesn't call ListenAndServe -> delegate to main
 // goal of New is to be the assembly point that wires
 // everything
-func New(addr string, st *store.Store) *http.Server {
+// New now also takes the solver client. It's a POINTER that may be nil: if the
+// solver couldn't be dialed, every other endpoint should still work, and only
+// /v1/solve should fail. A hard dependency here would mean my whole API refuses
+// to start because an optional microservice is down.
+func New(addr string, st *store.Store, sv *solver.Client) *http.Server {
 	// multiplexer = router
 	// looks at incoming request's method + path -> decides WHICH handler function should run
 	mux := http.NewServeMux()
@@ -53,6 +58,14 @@ func New(addr string, st *store.Store) *http.Server {
 
 	mux.HandleFunc("POST /v1/targets", targets.Create)
 	mux.HandleFunc("GET /v1/targets/{id}", targets.Get)
+
+	// The solve endpoint — the reason the rest of this exists.
+	// Registered only when a solver client was built, so a missing solver is a
+	// 404 on this one route rather than a nil-pointer panic on first request.
+	if sv != nil {
+		solve := handler.NewSolveHandler(st, sv)
+		mux.HandleFunc("POST /v1/solve", solve.Solve)
+	}
 
 	return &http.Server{
 		Addr:         addr,

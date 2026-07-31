@@ -1,0 +1,27 @@
+# buf's project config. buf is a protobuf build tool that replaces calling
+# protoc by hand with a Makefile full of flags I'd get wrong.
+#
+# Why I'm using it instead of raw protoc (which I already have installed):
+#   - One config generates BOTH languages, so Go and Python stubs can never
+#     drift out of sync because I forgot to rerun one of them.
+#   - `buf lint` enforces the naming conventions I'd otherwise have to remember.
+#   - `buf breaking` can diff my proto against git HEAD and refuse changes that
+#     would break an already-deployed client. That matters the moment anything
+#     runs outside my laptop.
+version: v2
+
+modules:
+  - path: proto
+
+lint:
+  # DEFAULT is buf's standard rule set: enforces things like versioned package
+  # names (solver.v1), UPPER_SNAKE enum values prefixed with the enum name, and
+  # a required zero value. My proto was written to satisfy these deliberately.
+  use:
+    - STANDARD
+
+breaking:
+  # WIRE_JSON catches changes that would break either binary wire compatibility
+  # or JSON representation — e.g. renumbering a field or changing its type.
+  use:
+    - WIRE_JSON
