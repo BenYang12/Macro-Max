@@ -20,7 +20,7 @@ DATABASE_URL ?= postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=
 # Same ?= fallback rule, so `make kroger-stores` works before .env defines a
 # zip. Must agree with the default in internal/config/config.go.
 KROGER_ZIP ?= 27514
-KROGER_LOCATION_ID ?= 09700223
+KROGER_LOCATION_ID ?= 09700117
 
 # .PHONY tells make these targets are commands, not files it should build.
 # Without it, creating a file literally named "test" would break `make test`

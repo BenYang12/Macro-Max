@@ -114,9 +114,10 @@ func LoadFromEnv() (Config, error) {
 		// which Kroger owns; see the note in .env.example about why that's
 		// worth verifying rather than assuming.
 		KrogerZip: envOr("KROGER_ZIP", "27514"),
-		// Harris Teeter Chapel Hill North. Verified to return live prices
-		// through the Kroger API; see the note in .env.example.
-		KrogerLocationID: envOr("KROGER_LOCATION_ID", "09700223"),
+		// Harris Teeter University Place, 2110 S Estes Dr — the store closest
+		// to campus, and the one my users would actually walk to. Verified to
+		// return live prices through the Kroger API; see .env.example.
+		KrogerLocationID: envOr("KROGER_LOCATION_ID", "09700117"),
 	}
 
 	// recall: I need to validate the port
