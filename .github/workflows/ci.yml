@@ -173,14 +173,28 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Set up Python
-        run: uv python install 3.12
-
       - name: Install dependencies
-        run: uv pip install --system ortools grpcio protobuf pytest
+        # This mirrors `make solver-test` EXACTLY, which is the whole point.
+        #
+        # My first version did `uv python install 3.12` then
+        # `uv pip install --system ...`, and it never passed. Those two fight
+        # each other: `uv python install` fetches a uv-MANAGED interpreter,
+        # while `--system` targets the runner's SYSTEM Python. So I was
+        # installing packages into one interpreter and running tests with
+        # another.
+        #
+        # The fix is to stop hand-rolling the environment and use the same
+        # venv-based flow I use locally. If CI and my laptop run different
+        # commands, CI is testing something I never test.
+        run: |
+          uv venv
+          uv pip install -e . pytest
 
       - name: Test
         # The whole pytest suite is pure — no gRPC server, no database — so
         # unlike the Go job this needs no service containers at all. That's the
         # payoff of keeping lp.py free of I/O.
-        run: PYTHONPATH=.:gen python -m pytest -q
+        #
+        # PYTHONPATH comes from [tool.pytest.ini_options] in pyproject.toml,
+        # so it doesn't need repeating here.
+        run: uv run pytest -q
