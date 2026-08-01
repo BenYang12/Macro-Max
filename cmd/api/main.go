@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BenYang12/Macro-Max/internal/config"
+	"github.com/BenYang12/Macro-Max/internal/kroger"
 	"github.com/BenYang12/Macro-Max/internal/server"
 	"github.com/BenYang12/Macro-Max/internal/solver"
 	"github.com/BenYang12/Macro-Max/internal/store"
@@ -77,7 +78,18 @@ func main() {
 		cancelPing()
 	}
 
-	srv := server.New(cfg.Addr(), st, sv, cache)
+	// The Kroger client, for the store-picker endpoint. Only built when
+	// credentials exist — without them /v1/stores is simply absent, which is a
+	// clearer signal than a route that 500s on every call.
+	var kr *kroger.Client
+	if cfg.KrogerClientID != "" && cfg.KrogerClientSecret != "" {
+		kr = kroger.New(cfg.KrogerClientID, cfg.KrogerClientSecret, nil)
+		log.Println("kroger client configured; /v1/stores enabled")
+	} else {
+		log.Println("KROGER_CLIENT_ID/SECRET not set; /v1/stores will not be registered")
+	}
+
+	srv := server.New(cfg.Addr(), st, sv, cache, kr)
 
 	// ListenAndServe BLOCKS until the server stops, but main must also watch
 	// ctx for the shutdown signal — two things to wait on, so the server

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/BenYang12/Macro-Max/internal/handler"
+	"github.com/BenYang12/Macro-Max/internal/kroger"
 	"github.com/BenYang12/Macro-Max/internal/solver"
 	"github.com/BenYang12/Macro-Max/internal/store"
 )
@@ -18,7 +19,10 @@ import (
 // solver couldn't be dialed, every other endpoint should still work, and only
 // /v1/solve should fail. A hard dependency here would mean my whole API refuses
 // to start because an optional microservice is down.
-func New(addr string, st *store.Store, sv *solver.Client, cache *solver.Cache) *http.Server {
+// kr may be nil when Kroger credentials aren't configured, in which case
+// /v1/stores simply isn't registered — the same graceful-degradation rule as
+// the solver.
+func New(addr string, st *store.Store, sv *solver.Client, cache *solver.Cache, kr *kroger.Client) *http.Server {
 	// multiplexer = router
 	// looks at incoming request's method + path -> decides WHICH handler function should run
 	mux := http.NewServeMux()
@@ -71,6 +75,13 @@ func New(addr string, st *store.Store, sv *solver.Client, cache *solver.Cache) *
 		}
 		solve := handler.NewSolveHandler(st, sv, c)
 		mux.HandleFunc("POST /v1/solve", solve.Solve)
+	}
+
+	// Store lookup, proxied through my API so Kroger credentials never reach a
+	// browser.
+	if kr != nil {
+		stores := handler.NewStoresHandler(kr)
+		mux.HandleFunc("GET /v1/stores", stores.List)
 	}
 
 	return &http.Server{
