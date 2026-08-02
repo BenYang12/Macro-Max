@@ -1,0 +1,56 @@
+# .dockerignore — what NOT to send to the Docker daemon.
+#
+# THE SECURITY REASON THIS FILE IS MANDATORY, not merely nice: my Dockerfile
+# does `COPY . .`, and without this file that copies .env — every API key I
+# have — into a build layer. Layers are immutable and travel with the image, so
+# deleting the file in a later RUN does NOT remove it; anyone who can pull the
+# image can extract it with `docker history` or by unpacking the layer tarball.
+#
+# .gitignore does not help here. Docker has never read it, and the two lists
+# genuinely differ: git ignores build output I don't want versioned, while this
+# ignores things that are either secret or would just bloat the build context.
+#
+# The performance reason is real too: everything not listed here gets tarred and
+# shipped to the daemon on every build. node_modules alone is hundreds of MB
+# that the Go build has no use for.
+
+# ------------------------------------------------------------------- SECRETS
+# First, and non-negotiable.
+.env
+.env.*
+!.env.example
+
+# ------------------------------------------------------- version control / CI
+.git
+.gitignore
+.github
+.golangci.yml
+
+# ------------------------------------------------------------------ frontend
+# The Next.js app deploys to Vercel, not into this image.
+web/
+
+# --------------------------------------------------------------------- python
+# The solver has its own Dockerfile and its own build context.
+solver/
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+
+# ----------------------------------------------------------- local dev cruft
+docker-compose.yml
+Makefile
+README.md
+docs/
+LICENSE
+*.md
+
+# Editor and OS noise.
+.vscode/
+.idea/
+.DS_Store
+
+# Agent tooling — not part of the application.
+.claude/
+.impeccable/
+skills-lock.json

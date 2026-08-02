@@ -25,12 +25,19 @@ KROGER_LOCATION_ID ?= 09700117
 # .PHONY tells make these targets are commands, not files it should build.
 # Without it, creating a file literally named "test" would break `make test`
 # (make would see the file exists and say "nothing to do").
-.PHONY: run test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry proto solver-test solver-up solver-logs solver-shell kroger-stores kroger-dry kroger-ingest web web-install web-build
+.PHONY: run lint test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry proto solver-test solver-up solver-logs solver-shell kroger-stores kroger-dry kroger-ingest web web-install web-build \
+        kroger-connect docker-build docker-verify
 
 ## Development loop
 
 run:            # start the API on the host (fast restarts)
 	go run ./cmd/api
+
+lint:           # run every analyzer in .golangci.yml over the whole module.
+                # This is what CI runs, so a clean `make lint` locally means a
+                # green lint job on GitHub. Install once with:
+                #   brew install golangci-lint
+	golangci-lint run ./...
 
 test:           # run every Go test in the module — UNIT tests only in practice,
                 # because integration tests self-skip when TEST_DATABASE_URL is
@@ -157,3 +164,36 @@ web:            # start the Next dev server with hot reload
 
 web-build:      # production build + typecheck, the same thing CI would run
 	cd web && npm run build
+
+## Phase 7 — recipes, cart, and deployment
+
+kroger-connect: # print the URL to open in a browser to grant cart access.
+                # The authorize endpoint 302s to Kroger's login page, so this
+                # has to be a real browser visit — curl would just follow the
+                # redirect and fetch HTML nobody sees. `open` hands it to the
+                # default browser on macOS.
+                #
+                # Needs cart.basic:write on the Kroger developer app and a
+                # registered redirect URI matching KROGER_REDIRECT_URI exactly.
+	@echo "Opening the Kroger consent screen. Make sure 'make run' is up."
+	open "http://localhost:$(PORT)/v1/kroger/authorize" || \
+		echo "Open this yourself: http://localhost:$(PORT)/v1/kroger/authorize"
+
+docker-build:   # build the API image exactly as a deploy would.
+                # Worth running before any deploy: it catches the whole class of
+                # "works on my Mac" failures (missing CA certs, a file excluded
+                # by .dockerignore) on my machine instead of in production.
+	docker build -t macrocart-api:local .
+
+docker-verify:  # prove the built image is safe and complete.
+                # Specifically that .env did NOT get baked into a layer — the
+                # Dockerfile does `COPY . .`, and layers are immutable, so a
+                # leaked secret cannot be deleted after the fact.
+	@echo "--- must run as a non-root user ---"
+	docker run --rm --entrypoint id macrocart-api:local
+	@echo "--- must contain NO .env (empty output below is the pass) ---"
+	@docker run --rm --entrypoint sh macrocart-api:local -c 'find / -name ".env" 2>/dev/null' || true
+	@echo "--- migrations and binaries ---"
+	docker run --rm --entrypoint ls macrocart-api:local /usr/local/bin
+	@docker run --rm --entrypoint sh macrocart-api:local -c 'ls /migrations | wc -l' | \
+		xargs -I{} echo "{} migration files"

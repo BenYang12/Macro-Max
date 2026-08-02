@@ -1,0 +1,80 @@
+# fly.toml — deployment config for the GO API.
+#
+# The solver has its own file (solver/fly.toml) and deploys as a SEPARATE Fly
+# app. Two apps rather than two processes in one, because they scale for
+# different reasons: the API is I/O-bound and cheap, the solver is CPU-bound and
+# wants more memory. Coupling them would mean paying for solver-sized machines
+# to serve health checks.
+#
+# NOTHING HERE HAS BEEN DEPLOYED. This file is written and reviewed, not run —
+# `fly launch` would create billable infrastructure, and that's a decision to
+# make deliberately rather than as a side effect of finishing a phase.
+#
+# When you do deploy, in order:
+#
+#   fly apps create macrocart-api
+#   fly postgres create --name macrocart-db        # then `fly postgres attach`
+#   fly redis create
+#   fly secrets set KROGER_CLIENT_ID=... KROGER_CLIENT_SECRET=... \
+#                   FDC_API_KEY=... ANTHROPIC_API_KEY=... \
+#                   TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+#   fly deploy
+#
+# SECRETS GO THROUGH `fly secrets`, NEVER in this file. This file is committed;
+# secrets set that way are encrypted at rest and injected as environment
+# variables at boot, which is exactly what internal/config already reads.
+
+app = "macrocart-api"
+primary_region = "iad" # us-east; closest Fly region to Chapel Hill
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Non-secret configuration only. Everything here is safe in a public repo.
+  PORT = "4000"
+
+  # Fly's private network gives every app a *.internal DNS name reachable only
+  # from inside the organization. So the solver is addressed by name and is
+  # never exposed to the public internet — which matters, because the solver has
+  # no authentication of its own. Its security model IS the network boundary.
+  SOLVER_ADDR = "macrocart-solver.internal:50051"
+
+  KROGER_ZIP = "27514"
+  KROGER_LOCATION_ID = "09700117"
+
+  # Must match the redirect URI registered on the Kroger developer app EXACTLY.
+  # Changing the app name above without changing this is the single most likely
+  # way to break the cart flow after a deploy.
+  KROGER_REDIRECT_URI = "https://macrocart-api.fly.dev/v1/kroger/callback"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+
+  # SCALE TO ZERO. Fly stops the machine when idle and starts it on the next
+  # request, which for a portfolio project that gets a handful of visits a month
+  # is the difference between a few dollars and nearly nothing. The cost is a
+  # cold start of a second or two on the first request.
+  #
+  # auto_start is what makes this safe: without it, a stopped machine stays
+  # stopped and the site is simply down.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    # /v1/healthcheck pings Postgres, so this verifies the whole dependency
+    # chain rather than just "the process is alive". A machine that can't reach
+    # its database should not be receiving traffic.
+    path = "/v1/healthcheck"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  # The Go API holds a connection pool and proxies to the solver — it does no
+  # heavy computation of its own. The smallest machine is genuinely enough, and
+  # oversizing "just in case" is how a free-tier project becomes a monthly bill.
+  size = "shared-cpu-1x"
+  memory = "512mb"
