@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+/*
+  Tailwind v4 is CSS-first: there is no tailwind.config.ts, and theme values
+  live here as CSS custom properties. One fewer config file to keep in sync.
+*/
+
+/*
+  prefers-reduced-motion guard. Someone who gets motion sickness or vestibular
+  symptoms from animation has told their OS so; honoring it is not optional.
+  Belt-and-braces at the global level so I can't forget it on an individual
+  component later.
+*/
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
+  A visible focus ring on EVERY focusable element. :focus-visible rather than
+  :focus so it appears for keyboard navigation but not on mouse clicks — which
+  is the behavior that historically made people delete focus styles entirely
+  and break keyboard access for everyone.
+*/
+:focus-visible {
+  outline: 2px solid #0284c7;
+  outline-offset: 2px;
+}

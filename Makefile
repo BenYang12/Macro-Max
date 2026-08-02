@@ -25,7 +25,7 @@ KROGER_LOCATION_ID ?= 09700117
 # .PHONY tells make these targets are commands, not files it should build.
 # Without it, creating a file literally named "test" would break `make test`
 # (make would see the file exists and say "nothing to do").
-.PHONY: run test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry proto solver-test solver-up solver-logs solver-shell kroger-stores kroger-dry kroger-ingest
+.PHONY: run test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry proto solver-test solver-up solver-logs solver-shell kroger-stores kroger-dry kroger-ingest web web-install web-build
 
 ## Development loop
 
@@ -145,3 +145,15 @@ kroger-ingest:  # the real thing: upsert products, append price history on
 	@test -n "$(KROGER_LOCATION_ID)" || \
 		(echo "KROGER_LOCATION_ID is not set. Run 'make kroger-stores' and put a locationId in .env"; exit 1)
 	go run ./cmd/krogeringest -location "$(KROGER_LOCATION_ID)"
+
+## Frontend (Phase 6) — Next.js on :3000
+## Needs `make run` in another terminal: the web app proxies /api/* to :4000.
+
+web-install:    # first-time setup (or after pulling package.json changes)
+	cd web && npm install
+
+web:            # start the Next dev server with hot reload
+	cd web && npm run dev
+
+web-build:      # production build + typecheck, the same thing CI would run
+	cd web && npm run build

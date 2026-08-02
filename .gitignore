@@ -28,3 +28,10 @@ __pycache__/
 # it churns constantly. The lockfile (solver/uv.lock) is what actually pins
 # things and stays committed.
 *.egg-info/
+
+# Node / Next.js (Phase 6 frontend). This repo has already leaked __pycache__
+# and egg-info once each; adding these BEFORE the first npm install rather than
+# after is the cheaper order.
+node_modules/
+.next/
+next-env.d.ts
