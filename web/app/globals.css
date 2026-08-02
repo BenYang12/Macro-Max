@@ -10,14 +10,28 @@
   symptoms from animation has told their OS so; honoring it is not optional.
   Belt-and-braces at the global level so I can't forget it on an individual
   component later.
+
+  WHY NOT 0.01ms: the copy-paste version of this rule everyone uses sets
+  durations to 0.01ms !important, which doesn't reduce motion so much as DELETE
+  every transition. That throws away useful feedback along with the nausea —
+  a button's hover state, a bar filling to show a value changed. "Reduced
+  motion" means less movement, not no state change.
+
+  So instead: keep transitions, make them short and non-spatial (1ms is
+  effectively instant to the eye but still fires transitionend handlers), and
+  kill only the two things that actually cause vestibular symptoms — repeating
+  animations and smooth scrolling, which moves the whole viewport under you.
 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
+    animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 1ms !important;
+  }
+
+  html {
     scroll-behavior: auto !important;
   }
 }

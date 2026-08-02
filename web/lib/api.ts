@@ -210,3 +210,64 @@ export async function solveForTarget(
   const basket = await solve(target.id);
   return { target, basket };
 }
+
+// ------------------------------------------------------------------ Phase 7
+//
+// Two endpoints that both act on the LATEST BASKET FOR A TARGET, which is why
+// they take a target id rather than a basket id: the solve response carries the
+// basket's contents, not its row (a cache hit has no row to name), so the
+// target id is the only identifier the client actually holds.
+
+/** One recipe from POST /v1/recipes. Mirrors recipes.Meal in Go. */
+export interface Meal {
+  name: string;
+  servings: number;
+  ingredients: string[];
+  steps: string[];
+  prep_minutes: number;
+}
+
+export interface RecipePlan {
+  meals: Meal[];
+  notes: string[];
+}
+
+/**
+ * generateRecipes turns the solved basket into a week of meals.
+ *
+ * WORTH KNOWING WHEN THIS 404s: the route isn't registered unless the server
+ * has an ANTHROPIC_API_KEY. That's deliberate — the solver is the product and
+ * the LLM is a finishing layer — so a 404 here means "not configured", not
+ * "broken", and the UI says so rather than showing a generic failure.
+ */
+export async function generateRecipes(targetId: number): Promise<RecipePlan> {
+  const { plan } = await post<{ plan: RecipePlan }>("/recipes", {
+    target_id: targetId,
+  });
+  return plan;
+}
+
+export interface CartResult {
+  items_added: number;
+  note: string;
+  skipped?: string[];
+}
+
+/**
+ * addToKrogerCart pushes the basket into the user's real Kroger cart.
+ *
+ * NOT IDEMPOTENT, and the UI must not pretend otherwise. Kroger's cart API is
+ * additive with no way to read the cart back and no way to remove what was
+ * added, so calling this twice doubles the quantities. The success message
+ * carries that warning, and the button disables itself after a success.
+ *
+ * A 401 means no Kroger account is connected yet — the user needs to visit
+ * /v1/kroger/authorize in a browser first, which is a full-page navigation
+ * rather than a fetch because it ends at Kroger's login screen.
+ */
+export async function addToKrogerCart(targetId: number): Promise<CartResult> {
+  const { cart } = await post<{ cart: CartResult }>("/kroger/cart", {
+    target_id: targetId,
+  });
+  return cart;
+}
