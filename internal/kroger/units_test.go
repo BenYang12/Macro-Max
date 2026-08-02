@@ -177,3 +177,76 @@ func TestParseSize_NormalizesUnitSpelling(t *testing.T) {
 		}
 	}
 }
+
+// Volume conversion, added once I had real densities. The whole reason this is
+// legitimate is that a LOOKED-UP density is data, not a guess — so these tests
+// pin the arithmetic against values I can check by hand.
+func TestVolumeGrams(t *testing.T) {
+	const (
+		canola   = 0.920
+		oliveOil = 0.915
+		milk     = 1.032
+	)
+
+	tests := []struct {
+		size    string
+		density float64
+		want    float64
+	}{
+		// 1 fl oz = 29.5735 ml. 32 fl oz canola = 946.35ml * 0.92 = 870.6g.
+		{"32 fl oz", canola, 870.65},
+		{"32 oz", canola, 870.65},  // bare oz on a liquid = fluid ounces
+		{"40 oz", canola, 1088.31}, // the Crisco bottle I skipped before
+		{"25.4 fl oz", oliveOil, 687.42},
+		// 1 gallon = 3785.41ml. Milk at 1.032 = 3906.5g.
+		{"1 gal", milk, 3906.55},
+		{"0.5 gal", milk, 1953.27},
+		{"1/2 gal", milk, 1953.27}, // the fraction spelling Kroger also uses
+		{"59 fl oz", milk, 1800.60},
+		{"500 ml", milk, 516.0},
+		{"2 l", milk, 2064.0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.size, func(t *testing.T) {
+			got, err := VolumeGrams(tc.size, tc.density)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if math.Abs(got-tc.want) > 0.5 {
+				t.Errorf("got %.2f grams; want %.2f", got, tc.want)
+			}
+		})
+	}
+}
+
+// No density means no conversion — there is deliberately no default, because a
+// wrong default density is exactly the silent error this whole design avoids.
+func TestVolumeGrams_RequiresADensity(t *testing.T) {
+	if _, err := VolumeGrams("1 gal", 0); err == nil {
+		t.Fatal("expected an error with no density supplied")
+	}
+	if _, err := VolumeGrams("16 oz", -1); err == nil {
+		t.Fatal("expected an error with a negative density")
+	}
+}
+
+// A size with no volume unit at all must fail, so the caller can fall back to
+// the mass reading (some "liquid" foods are genuinely sold by weight).
+func TestVolumeGrams_NoVolumeUnitIsAnError(t *testing.T) {
+	if _, err := VolumeGrams("2 lb", 0.92); err == nil {
+		t.Fatal("expected an error: 'lb' is a mass unit, not a volume")
+	}
+}
+
+// The fraction spellings must survive normalization. "1/2 gal" used to parse
+// as "2 gal" once the slash became a separator — four times too much milk.
+func TestParseSize_FractionsAreHandled(t *testing.T) {
+	g, err := VolumeGrams("1/2 gal", 1.0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if math.Abs(g-1892.7) > 1 {
+		t.Errorf("got %.1f g; want ~1892.7 (half a gallon of water)", g)
+	}
+}

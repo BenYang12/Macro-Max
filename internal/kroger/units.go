@@ -106,20 +106,10 @@ var sizePattern = regexp.MustCompile(`([0-9]*\.?[0-9]+)\s*([a-z_]+)`)
 // Mass is the thing I actually need and the thing I can convert exactly, so
 // preferring it turns a would-be skip into a usable product.
 func ParseSize(raw string) (Size, error) {
-	// Normalize first so the matching below only deals with one shape:
-	// lowercase, "fl oz" collapsed to "floz", punctuation that separates
-	// compound sizes turned into spaces.
-	s := strings.ToLower(strings.TrimSpace(raw))
+	s := normalizeSizeString(raw)
 	if s == "" {
 		return Size{}, fmt.Errorf("empty size string")
 	}
-	s = strings.ReplaceAll(s, "fluid ounce", "floz")
-	s = strings.ReplaceAll(s, "fl oz", "floz")
-	s = strings.ReplaceAll(s, "fl. oz", "floz")
-	s = strings.ReplaceAll(s, "fl_oz", "floz")
-	// "/" and "," separate the halves of a compound size; "approx" and "about"
-	// are noise I can drop entirely.
-	s = strings.NewReplacer("/", " ", ",", " ", "approx", " ", "about", " ", "~", " ").Replace(s)
 
 	matches := sizePattern.FindAllStringSubmatch(s, -1)
 	if len(matches) == 0 {
@@ -176,6 +166,26 @@ func ParseSize(raw string) (Size, error) {
 	return Size{}, fmt.Errorf("no recognizable unit in %q", raw)
 }
 
+// normalizeSizeString lowercases, collapses the many spellings of fluid
+// ounces, and turns compound-size punctuation into spaces. Shared by ParseSize
+// and VolumeGrams so the two can never disagree about what a string says.
+func normalizeSizeString(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "fluid ounce", "floz")
+	s = strings.ReplaceAll(s, "fl oz", "floz")
+	s = strings.ReplaceAll(s, "fl. oz", "floz")
+	s = strings.ReplaceAll(s, "fl_oz", "floz")
+	// "1/2 gal" must not become "1 2 gal" — handle the fraction before "/"
+	// becomes a separator.
+	s = strings.ReplaceAll(s, "1/2", "0.5")
+	s = strings.ReplaceAll(s, "1/4", "0.25")
+	s = strings.ReplaceAll(s, "3/4", "0.75")
+	return strings.NewReplacer("/", " ", ",", " ", "approx", " ", "about", " ", "~", " ").Replace(s)
+}
+
 func canonicalMassUnit(u string) string {
 	switch u {
 	case "gram", "grams":
@@ -187,6 +197,88 @@ func canonicalMassUnit(u string) string {
 	default:
 		return u
 	}
+}
+
+// mlPerVolumeUnit converts the volume units Kroger uses into millilitres.
+// These are exact US customary definitions, not estimates.
+var mlPerVolumeUnit = map[string]float64{
+	"floz": 29.5735295625,
+
+	// Bare "oz" counts as FLUID ounces here, and this line is the entire point
+	// of the density table.
+	//
+	// It is safe ONLY because VolumeGrams is unreachable without a density,
+	// and a density exists only for foods I explicitly listed as liquids. So
+	// "32 oz" means 907g of cheese and 946ml of milk, and the FOOD decides
+	// which — never the string alone. Having "oz" in both the mass table and
+	// this one isn't a contradiction; it's the same ambiguity resolved by
+	// context, which is the only thing that can resolve it.
+	"oz":    29.5735295625,
+	"ounce": 29.5735295625,
+
+	"ml":     1,
+	"l":      1000,
+	"liter":  1000,
+	"litre":  1000,
+	"pt":     473.176473,
+	"pint":   473.176473,
+	"qt":     946.352946,
+	"quart":  946.352946,
+	"gal":    3785.411784,
+	"gallon": 3785.411784,
+}
+
+// VolumeGrams converts a volume size to grams GIVEN a density in g/ml.
+//
+// I resisted this for a while, because "converting volume to mass needs a
+// density I don't have" was the honest position and it kept me from guessing.
+// What changed is that I now HAVE densities — for the four specific foods that
+// matter — and a measured density is not a guess.
+//
+// The distinction I'm drawing: refusing to convert ANY volume is safe but
+// costs me every oil, every milk, and every liquid egg white. Converting with
+// a per-food density I've looked up is a bounded, documented assumption. What
+// I still won't do is apply a DEFAULT density to an unknown food, which is
+// why this takes the density as a required argument and has no fallback.
+func VolumeGrams(rawSize string, gramsPerML float64) (float64, error) {
+	if gramsPerML <= 0 {
+		return 0, fmt.Errorf("no density supplied for %q", rawSize)
+	}
+
+	s := normalizeSizeString(rawSize)
+	matches := sizePattern.FindAllStringSubmatch(s, -1)
+	for _, m := range matches {
+		qty, err := strconv.ParseFloat(m[1], 64)
+		if err != nil || qty <= 0 {
+			continue
+		}
+		if ml, ok := mlPerVolumeUnit[m[2]]; ok {
+			return qty * ml * gramsPerML, nil
+		}
+	}
+	return 0, fmt.Errorf("no volume unit found in %q", rawSize)
+}
+
+// AsFluidOunces re-expresses a volume size in fluid ounces.
+//
+// Purely for the display columns (products.pack_size_qty / pack_size_unit).
+// My schema's CHECK constraint allows fl_oz but not gal/qt/pt, so a gallon of
+// milk has to be recorded as 128 fl_oz to be storable at all. Before this it
+// fell through to "each", which made the label read "1.00 each" for a gallon —
+// technically harmless (the solver only reads net_weight_g) but wrong on a
+// column whose entire job is to be human-readable.
+func AsFluidOunces(rawSize string) (float64, bool) {
+	s := normalizeSizeString(rawSize)
+	for _, m := range sizePattern.FindAllStringSubmatch(s, -1) {
+		qty, err := strconv.ParseFloat(m[1], 64)
+		if err != nil || qty <= 0 {
+			continue
+		}
+		if ml, ok := mlPerVolumeUnit[m[2]]; ok {
+			return qty * ml / mlPerVolumeUnit["floz"], true
+		}
+	}
+	return 0, false
 }
 
 // NetWeightGrams is the function the ingestion worker actually calls.
