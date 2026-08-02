@@ -50,6 +50,14 @@ var excludeWords = []string{
 	// Jarred/canned when I want fresh, plus condiments.
 	"roasted red", "pickled", "dressing", "sauce", "dip", "hummus",
 
+	// Cured/smoked forms. My catalog models RAW proteins, and smoked salmon
+	// or cured meat has meaningfully different macros (and a lot more sodium)
+	// than the fresh fillet my nutrition data describes.
+	"smoked", "cured", "lox",
+
+	// Prepared single-serve cups and instant versions of dry goods.
+	"instant", "cup", "cups", "microwavable",
+
 	// Supplements and bars that mention protein sources. "bar" is now matched
 	// as a WHOLE WORD — as a substring it ate "Barilla" and threw out every
 	// box of pasta on my second dry run.
@@ -59,24 +67,33 @@ var excludeWords = []string{
 	"dog", "dogs", "cat food", "pet", "pets",
 }
 
-// liquidFoods are foods sold by volume, where a bare "oz" on the label almost
-// certainly means FLUID ounces, not weight.
+// liquidDensity is grams per millilitre for the foods sold by volume.
 //
-// My parser reads bare "oz" as mass, which is right for cheese and wrong for
-// oil. For a 40 fl oz bottle of canola that's about a 4% overstatement of the
-// weight — small, invisible, and exactly the kind of quiet error I'd rather
-// not have. So for these foods a bare "oz" is REJECTED instead of assumed.
+// Everything else in this project refuses to convert volume to mass, because
+// doing it without a density is a guess. This table is what makes the
+// conversion legitimate for these four: a LOOKED-UP density is data, not an
+// assumption.
 //
-// The cost is real: it means most oils and milks get no Kroger price at all,
-// and their SEED products carry the solver. I'm choosing that over being
-// slightly wrong without knowing it. A density table would recover them, and
-// that's a reasonable later addition — but densities are per-food estimates
-// too, so it trades one assumption for another.
-var liquidFoods = map[string]bool{
-	"Olive Oil":            true,
-	"Canola Oil":           true,
-	"Milk, 2% reduced fat": true,
-	"Egg Whites, liquid":   true,
+// It also settles the bare-"oz" ambiguity. For a food in this table, "32 oz"
+// is read as 32 FLUID ounces, because that's how liquids are labeled. For
+// everything else "32 oz" stays weight. The distinction used to cost me every
+// oil, milk, and liquid egg white on the shelf.
+//
+// Densities at room temperature:
+//
+//	olive oil   0.915  (lighter than water — oils float)
+//	canola oil  0.920
+//	milk 2%     1.032  (slightly denser than water; fat lowers it, solids raise it)
+//	egg white   1.030
+//
+// A food NOT in this table still gets the old treatment: volume sizes are
+// rejected outright. There is deliberately no default density, because a
+// wrong default is exactly the silent error I've been avoiding all project.
+var liquidDensity = map[string]float64{
+	"Olive Oil":            0.915,
+	"Canola Oil":           0.920,
+	"Milk, 2% reduced fat": 1.032,
+	"Egg Whites, liquid":   1.030,
 }
 
 // foodSearch maps one of my foods to how I'd search for it at Kroger.
@@ -114,18 +131,29 @@ var searchTerms = []foodSearch{
 	// ---- proteins ----
 	{FoodName: "Chicken Breast, raw", Term: "boneless skinless chicken breast"},
 	{FoodName: "Chicken Thigh, raw", Term: "boneless skinless chicken thighs"},
-	{FoodName: "Ground Beef, 90/10, raw", Term: "ground beef 90 lean"},
+	// Harris Teeter stocks 93/7 and 80/20, never 90/10. Requiring "93%"
+	// picks the lean one and EXCLUDES the 80/20, whose macros are far off
+	// (254 kcal vs 176 per 100g). My food models 90/10, so the real product
+	// is a touch leaner than my nutrition says — closer than the alternative.
+	{FoodName: "Ground Beef, 90/10, raw", Term: "93% lean ground beef"},
 	{FoodName: "Ground Turkey, 93/7, raw", Term: "ground turkey 93 lean"},
 	{FoodName: "Pork Loin, raw", Term: "boneless pork loin"},
-	{FoodName: "Salmon, Atlantic farmed, raw", Term: "atlantic salmon fillet"},
+	// Dropped "fillet": HT sells "Fresh Atlantic Salmon" with no such word,
+	// so requiring it matched nothing.
+	{FoodName: "Salmon, Atlantic farmed, raw", Term: "atlantic salmon"},
 	{FoodName: "Tilapia, raw", Term: "tilapia fillets"},
 	{FoodName: "Tuna, canned in water, drained", Term: "chunk light tuna water"},
 	{FoodName: "Eggs, whole, raw", Term: "large grade a eggs", GramsPerItem: 50},
 	{FoodName: "Egg Whites, liquid", Term: "liquid egg whites"},
 	{FoodName: "Whey Protein Isolate, powder", Term: "whey protein isolate"},
 	{FoodName: "Tofu, firm", Term: "firm tofu"},
-	{FoodName: "Black Beans, dried", Term: "dried black beans"},
-	{FoodName: "Lentils, dried", Term: "dried lentils"},
+	// "dried" -> "dry". HT labels them "Dry Black Turtle Beans", and the word
+	// "dry" is what separates them from the wall of CANNED black beans that
+	// dominate this search.
+	{FoodName: "Black Beans, dried", Term: "dry black beans"},
+	// Same "dried" -> "dry" fix, and it also filters out the instant/prepared
+	// lentil cups that share the search.
+	{FoodName: "Lentils, dried", Term: "dry lentils"},
 
 	// ---- carbs ----
 	{FoodName: "White Rice, long grain, dry", Term: "long grain white rice"},

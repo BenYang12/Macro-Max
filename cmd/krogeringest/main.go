@@ -46,6 +46,7 @@ func main() {
 	locationID := flag.String("location", "", "Kroger locationId to ingest prices from")
 	dryRun := flag.Bool("dry-run", false, "fetch and parse but do not write to the database")
 	only := flag.String("only", "", "ingest just this one food name (for debugging a single mapping)")
+	probe := flag.String("probe", "", "search this raw term and print UNFILTERED results (for tuning search terms)")
 	flag.Parse()
 
 	cfg, err := config.LoadFromEnv()
@@ -66,6 +67,20 @@ func main() {
 	defer cancel()
 
 	client := kroger.New(cfg.KrogerClientID, cfg.KrogerClientSecret, nil)
+
+	// Probe is read-only and needs no database: it exists purely so I can see
+	// what Harris Teeter actually CALLS a food before guessing a search term.
+	// My first pass had five foods return nothing because I wrote the terms a
+	// shopper would type, not the terms this store uses.
+	if *probe != "" {
+		if *locationID == "" {
+			log.Fatal("-probe needs -location too (prices and availability are per-store)")
+		}
+		if err := runProbe(ctx, client, *probe, *locationID); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	// Store lookup is read-only, so it never opens a database connection.
 	if *zip != "" {
@@ -250,26 +265,41 @@ func ingestOneFood(ctx context.Context, client *kroger.Client, locationID string
 			continue
 		}
 
-		// For foods sold by volume, a bare "oz" is almost certainly FLUID
-		// ounces mislabeled, and reading it as mass would be quietly ~4% wrong.
-		// Rejecting is the honest choice.
-		if liquidFoods[m.FoodName] && isBareOunces(item.Size) {
-			out.Skipped = append(out.Skipped, fmt.Sprintf(
-				"%s (%s): bare \"oz\" on a liquid food is ambiguous (fluid vs weight), so I won't guess",
-				p.Description, item.Size))
-			continue
+		// Foods with a known density go down the VOLUME path: a bare "oz" on a
+		// bottle of oil means fluid ounces, and I can now convert that
+		// correctly instead of either guessing or giving up.
+		var grams float64
+		var err error
+		if density, isLiquid := liquidDensity[m.FoodName]; isLiquid {
+			grams, err = kroger.VolumeGrams(item.Size, density)
+			if err != nil {
+				// Fall back to the mass reading — some liquid foods really are
+				// sold by weight (a tub of butter-with-oil), and a size with no
+				// volume unit at all should still parse.
+				grams, err = kroger.NetWeightGrams(item.Size, m.GramsPerItem)
+			}
+		} else {
+			grams, err = kroger.NetWeightGrams(item.Size, m.GramsPerItem)
 		}
 
-		grams, err := kroger.NetWeightGrams(item.Size, m.GramsPerItem)
 		if err != nil {
-			// SKIP AND LOG, NEVER GUESS. This is where oils and milk drop out,
-			// and the log line says exactly why.
+			// SKIP AND LOG, NEVER GUESS. Anything without a density and
+			// without a mass reading drops out here, and the log says why.
 			out.Skipped = append(out.Skipped,
 				fmt.Sprintf("%s (%s): %v", p.Description, item.Size, err))
 			continue
 		}
 
+		// Display columns. For a liquid I re-express the label in fluid ounces,
+		// because the schema allows fl_oz but not gal/qt/pt — and "1.00 each"
+		// for a gallon of milk is a useless thing to read in psql.
 		size, _ := kroger.ParseSize(item.Size)
+		packQty, packUnit := size.Qty, normalizeUnitForSchema(size.Unit)
+		if _, isLiquid := liquidDensity[m.FoodName]; isLiquid {
+			if floz, ok := kroger.AsFluidOunces(item.Size); ok {
+				packQty, packUnit = floz, "fl_oz"
+			}
+		}
 
 		out.Products = append(out.Products, store.IngestProduct{
 			FoodID:          food.ID,
@@ -277,8 +307,8 @@ func ingestOneFood(ctx context.Context, client *kroger.Client, locationID string
 			ExternalID:      p.ProductID,
 			Name:            p.Description,
 			Brand:           p.Brand,
-			PackSizeQty:     size.Qty,
-			PackSizeUnit:    normalizeUnitForSchema(size.Unit),
+			PackSizeQty:     packQty,
+			PackSizeUnit:    packUnit,
 			NetWeightG:      grams,
 			PriceCents:      kroger.DollarsToCents(item.Price.Regular),
 			PromoPriceCents: kroger.DollarsToCents(item.Price.Promo),
@@ -349,22 +379,6 @@ func excludedBy(productName string) string {
 		}
 	}
 	return ""
-}
-
-// isBareOunces reports whether a size uses "oz" with no "fl"/"fluid" qualifier.
-// Kroger writes fluid ounces both ways, and the unqualified spelling is the
-// ambiguous one.
-func isBareOunces(size string) bool {
-	s := strings.ToLower(size)
-	if !strings.Contains(s, "oz") {
-		return false
-	}
-	// Explicitly fluid is NOT ambiguous — my parser already rejects it as a
-	// volume, with a clearer message than this check would give.
-	if strings.Contains(s, "fl") || strings.Contains(s, "fluid") {
-		return false
-	}
-	return true
 }
 
 func firstUsableItem(p kroger.Product) (kroger.ProductItem, bool) {
@@ -498,4 +512,49 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
+}
+
+// runProbe prints every search result with NO filtering applied.
+//
+// This is a diagnostic, not part of ingestion. When a food matches nothing I
+// need to distinguish three very different causes:
+//
+//  1. Kroger returned nothing        -> my term is wrong
+//  2. Kroger returned things, but my all-words filter rejected them all
+//     -> my term is too specific
+//  3. Kroger returned things and the SIZE didn't parse
+//     -> a units problem, not a search problem
+//
+// The ingest log alone can't tell those apart, because filtered-out results
+// never get logged. Showing the raw list makes the cause obvious immediately.
+func runProbe(ctx context.Context, client *kroger.Client, term, locationID string) error {
+	products, err := client.SearchProducts(ctx, term, locationID, 25)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%d raw results for %q at %s:\n\n", len(products), term, locationID)
+	for _, p := range products {
+		size, price := "-", "-"
+		if it, ok := firstUsableItem(p); ok {
+			size = it.Size
+			price = fmt.Sprintf("%d", kroger.DollarsToCents(it.Price.Regular))
+		}
+
+		// Show WHY each result would be dropped, so tuning is a read rather
+		// than a guess.
+		verdict := "OK"
+		if !matchesSearchTerm(p.Description, term) {
+			verdict = "dropped: not all search words present"
+		} else if bad := excludedBy(p.Description); bad != "" {
+			verdict = "dropped: exclude word " + bad
+		} else if size != "-" {
+			if _, err := kroger.NetWeightGrams(size, 0); err != nil {
+				verdict = "dropped: " + err.Error()
+			}
+		}
+
+		fmt.Printf("  %-52s %-14s %6s  %s\n", truncate(p.Description, 52), size, price, verdict)
+	}
+	return nil
 }
