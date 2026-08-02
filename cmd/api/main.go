@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -14,7 +15,9 @@ import (
 	"time"
 
 	"github.com/BenYang12/Macro-Max/internal/config"
+	"github.com/BenYang12/Macro-Max/internal/crypt"
 	"github.com/BenYang12/Macro-Max/internal/kroger"
+	"github.com/BenYang12/Macro-Max/internal/recipes"
 	"github.com/BenYang12/Macro-Max/internal/server"
 	"github.com/BenYang12/Macro-Max/internal/solver"
 	"github.com/BenYang12/Macro-Max/internal/store"
@@ -56,7 +59,7 @@ func main() {
 		log.Printf("warning: solver client unavailable (%v); /v1/solve will not be registered", err)
 		sv = nil
 	} else {
-		defer sv.Close()
+		defer func() { _ = sv.Close() }()
 		log.Printf("solver client configured for %s", cfg.SolverAddr)
 	}
 
@@ -68,7 +71,7 @@ func main() {
 		log.Printf("warning: solve cache unavailable (%v); every solve will be computed", err)
 		cache = nil
 	} else {
-		defer cache.Close()
+		defer func() { _ = cache.Close() }()
 		pingCtx, cancelPing := context.WithTimeout(ctx, 2*time.Second)
 		if err := cache.Ping(pingCtx); err != nil {
 			log.Printf("warning: redis ping failed (%v); solves will not be cached", err)
@@ -89,7 +92,47 @@ func main() {
 		log.Println("KROGER_CLIENT_ID/SECRET not set; /v1/stores will not be registered")
 	}
 
-	srv := server.New(cfg.Addr(), st, sv, cache, kr)
+	// Claude, for POST /v1/recipes. Optional in exactly the same way the solver
+	// and the cache are: no key, no route, everything else unaffected. That's
+	// the whole architectural claim of this project made concrete — the solver
+	// is the product, and the LLM is a finishing layer that must be removable.
+	var rc *recipes.Client
+	if cfg.AnthropicAPIKey != "" {
+		rc = recipes.New(cfg.AnthropicAPIKey, "")
+		log.Println("anthropic client configured; /v1/recipes enabled")
+	} else {
+		log.Println("ANTHROPIC_API_KEY not set; /v1/recipes will not be registered")
+	}
+
+	// The encryption key for stored Kroger cart tokens.
+	//
+	// Three outcomes, deliberately distinguished. Not set: the cart feature is
+	// off, which is a normal configuration. Set but INVALID: that's a mistake,
+	// and log.Fatal is correct — silently disabling a feature because the key
+	// was 16 bytes instead of 32 would be discovered days later. Valid: on.
+	var box *crypt.Box
+	switch b, err := crypt.NewBox(cfg.TokenEncryptionKey); {
+	case errors.Is(err, crypt.ErrNoKey):
+		log.Println("TOKEN_ENCRYPTION_KEY not set; Kroger cart routes will not be registered")
+	case err != nil:
+		log.Fatalf("TOKEN_ENCRYPTION_KEY is set but unusable: %v", err)
+	default:
+		box = b
+		if kr != nil {
+			log.Println("kroger cart routes enabled")
+		}
+	}
+
+	srv := server.New(server.Deps{
+		Addr:              cfg.Addr(),
+		Store:             st,
+		Solver:            sv,
+		Cache:             cache,
+		Kroger:            kr,
+		Recipes:           rc,
+		CryptoBox:         box,
+		KrogerRedirectURI: cfg.KrogerRedirectURI,
+	})
 
 	// ListenAndServe BLOCKS until the server stops, but main must also watch
 	// ctx for the shutdown signal — two things to wait on, so the server

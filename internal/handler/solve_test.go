@@ -346,6 +346,43 @@ func TestSolve_CacheHitSkipsTheSolver(t *testing.T) {
 	}
 }
 
+// A cache hit must STILL write the basket row — the regression test for a bug
+// Phase 7 uncovered.
+//
+// The mismatch that caused it: the cache is CONTENT-addressed (same macros,
+// budget, store, and prices give the same key), but a basket row is keyed by
+// TARGET. Solving a brand-new target whose numbers happen to match an earlier
+// one is therefore a cache hit, and the old early return meant that target
+// ended up with no basket at all.
+//
+// Harmless while baskets were only an audit trail. Not harmless once
+// /v1/recipes and /v1/kroger/cart began reading "the latest basket for this
+// target": both told a user who had just solved successfully to go solve first.
+func TestSolve_CacheHitStillPersistsTheBasket(t *testing.T) {
+	st := okStore()
+	cache := &fakeCache{hit: &solverv1.SolveResponse{
+		Status:         solverv1.SolveStatus_SOLVE_STATUS_OPTIMAL,
+		TotalCostCents: 999,
+		Achieved:       &solverv1.MacroTotals{},
+		Items: []*solverv1.BasketItem{
+			{ProductId: 1, Packs: 2, Grams: 800, CostCents: 999},
+		},
+	}}
+	h := NewSolveHandler(st, okSolver(), cache)
+
+	postSolve(t, h, `{"target_id": 1}`)
+
+	if st.savedBasket == nil {
+		t.Fatal("a cache hit did not persist a basket; /v1/recipes and /v1/kroger/cart depend on this row")
+	}
+	if st.savedBasket.TotalCostCents != 999 {
+		t.Errorf("persisted total = %d, want the CACHED 999", st.savedBasket.TotalCostCents)
+	}
+	if len(st.savedItems) != 1 {
+		t.Errorf("persisted items = %d, want 1 — a basket row without its lines is a silent lie", len(st.savedItems))
+	}
+}
+
 // A miss must compute AND store, so the next identical request hits.
 func TestSolve_CacheMissComputesAndStores(t *testing.T) {
 	cache := &fakeCache{} // nil hit = miss

@@ -153,6 +153,23 @@ func (h *SolveHandler) Solve(w http.ResponseWriter, r *http.Request) {
 				cacheKey = k
 				if cached := h.Cache.Get(ctx, k); cached != nil {
 					w.Header().Set("X-Cache", "hit")
+					// PERSIST ON A CACHE HIT TOO. This line is not an
+					// optimization — leaving it out was a real bug, and Phase 7
+					// is what exposed it.
+					//
+					// The mismatch: the cache is CONTENT-addressed (same macros,
+					// budget, store, and prices produce the same key), but a
+					// basket row is keyed by TARGET. So solving a brand-new
+					// target whose numbers happen to match an earlier one is a
+					// cache hit, and the early return meant that target ended up
+					// with no basket row at all.
+					//
+					// That was invisible while baskets were only an audit trail.
+					// It stopped being invisible the moment /v1/recipes and
+					// /v1/kroger/cart started reading "the latest basket for
+					// this target" — both would answer "solve first" to someone
+					// who had just solved successfully.
+					h.persist(ctx, target, cacheKey, cached)
 					writeSolveResponse(w, cached)
 					return
 				}

@@ -143,7 +143,10 @@ func (t *tokenManager) refresh(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("requesting token: %w", err)
 	}
-	defer resp.Body.Close()
+	// The _ = is for errcheck: closing a response body can technically fail,
+	// and there is nothing useful to do about it inside a defer. Being explicit
+	// beats an exclusion rule that would also hide closes I DO care about.
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))

@@ -64,6 +64,39 @@ type Config struct {
 	// KrogerLocationID is the resolved store to solve against. Empty until I've
 	// run `krogeringest -zip` once and picked one.
 	KrogerLocationID string
+
+	// ---------------------------------------------------------------- Phase 7
+
+	// AnthropicAPIKey powers POST /v1/recipes. Secret, so no default — and the
+	// same graceful-degradation rule as the solver applies at the routing
+	// layer: if this is empty, the recipes route simply isn't registered and
+	// everything else keeps working. Recipes are a FINISHING layer; the solver
+	// is the product, and the product must not depend on an LLM being reachable.
+	AnthropicAPIKey string
+
+	// KrogerRedirectURI is the callback Kroger sends the user back to after
+	// they authorize cart access. It must match the value registered on the
+	// developer app EXACTLY — scheme, host, port, path, trailing slash. A
+	// mismatch is the single most common OAuth failure, and Kroger reports it
+	// as a generic error rather than telling you which part disagreed.
+	//
+	// Not a secret (it appears in a browser URL bar), so it gets a local default.
+	KrogerRedirectURI string
+
+	// TokenEncryptionKey encrypts the Kroger user refresh token before it goes
+	// in Postgres. 32 bytes, hex-encoded (64 hex characters):
+	//
+	//     openssl rand -hex 32
+	//
+	// WHY ENCRYPT AT ALL: a client-credentials token (Phase 5) grants access to
+	// a public product catalog. A user's authorization-code refresh token
+	// grants long-lived write access to a REAL PERSON'S CART. Those are not the
+	// same risk, and a database dump should not hand over the second one.
+	//
+	// No default, and deliberately no auto-generated fallback: a key that
+	// changes on restart would silently make every stored token undecryptable,
+	// which fails as confusing "invalid token" errors much later.
+	TokenEncryptionKey string
 }
 
 // http.Server is a struct in Go's built-in net/http package that a program that listens for web requests from clients (like a browser) and sends back responses
@@ -118,6 +151,12 @@ func LoadFromEnv() (Config, error) {
 		// to campus, and the one my users would actually walk to. Verified to
 		// return live prices through the Kroger API; see .env.example.
 		KrogerLocationID: envOr("KROGER_LOCATION_ID", "09700117"),
+
+		// Phase 7. Both secrets get no default, for the reason spelled out on
+		// FDCAPIKey; the redirect URI isn't a secret, so it gets the local one.
+		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
+		KrogerRedirectURI:  envOr("KROGER_REDIRECT_URI", "http://localhost:4000/v1/kroger/callback"),
+		TokenEncryptionKey: os.Getenv("TOKEN_ENCRYPTION_KEY"),
 	}
 
 	// recall: I need to validate the port

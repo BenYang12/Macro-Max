@@ -31,6 +31,12 @@ type Client struct {
 	HTTP    *http.Client
 	tokens  *tokenManager
 
+	// AuthorizeBaseURL is where a USER's browser goes to grant cart access
+	// (Phase 7). Exported for the same reason BaseURL is: tests point it at an
+	// httptest server. Distinct from the token URL — see cart.go on why mixing
+	// the two produces a very confusing error.
+	AuthorizeBaseURL string
+
 	// limiter paces outgoing requests. See waitForSlot.
 	limiterMu sync.Mutex
 	lastCall  time.Time
@@ -42,8 +48,9 @@ func New(clientID, clientSecret string, store TokenStore) *Client {
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 
 	return &Client{
-		BaseURL: defaultBaseURL,
-		HTTP:    httpClient,
+		BaseURL:          defaultBaseURL,
+		AuthorizeBaseURL: defaultAuthorizeURL,
+		HTTP:             httpClient,
 		tokens: &tokenManager{
 			clientID:     clientID,
 			clientSecret: clientSecret,
@@ -179,7 +186,10 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, dst an
 	if err != nil {
 		return fmt.Errorf("requesting %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	// The _ = is for errcheck: closing a response body can technically fail,
+	// and there is nothing useful to do about it inside a defer. Being explicit
+	// beats an exclusion rule that would also hide closes I DO care about.
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
