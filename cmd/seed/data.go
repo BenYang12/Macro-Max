@@ -65,8 +65,6 @@ var (
 	tagsVegGF  = []string{"vegetarian", "gluten_free"}
 	tagsVeg    = []string{"vegetarian"}
 	tagsMeatGF = []string{"gluten_free", "dairy_free"}
-	tagsGF     = []string{"gluten_free"}
-	tagsNone   = []string{}
 )
 
 // seedFoods is the whole catalog. Coverage is deliberate, per the plan:

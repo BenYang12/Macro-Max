@@ -73,10 +73,10 @@ func (s *Store) UpsertProduct(ctx context.Context, p IngestProduct) (IngestResul
 		p.StoreID, p.ExternalID,
 	).Scan(&existingID, &oldPrice, &oldPromo)
 
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		found = true
-	case err == pgx.ErrNoRows:
+	case pgx.ErrNoRows:
 		found = false
 	default:
 		return res, fmt.Errorf("reading existing product: %w", err)

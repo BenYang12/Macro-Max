@@ -359,7 +359,7 @@ func excludedBy(productName string) string {
 	// Split on anything that isn't a letter or digit, so "Butter, Spreadable"
 	// and "Non-Stick" tokenize the way a reader would expect.
 	words := strings.FieldsFunc(lower, func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 	})
 	wordSet := make(map[string]bool, len(words))
 	for _, w := range words {

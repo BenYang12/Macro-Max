@@ -1,0 +1,37 @@
+# golangci-lint config. It runs several linters in one pass over the module.
+#
+# I'm keeping this deliberately close to the defaults. A linter config that
+# enables everything produces so much noise that the real findings get ignored,
+# which is worse than not linting at all. These are the checks that catch bugs
+# or genuine dead weight, not style opinions gofmt already settles.
+version: "2"
+
+linters:
+  enable:
+    # errcheck is the one that earns its place in this project: it flags
+    # unchecked error returns. My whole codebase leans on errors-as-values, so
+    # an ignored error is a silently swallowed failure.
+    - errcheck
+    - govet
+    - ineffassign   # assignments whose value is never used
+    - staticcheck   # a large set of real correctness checks
+    - unused        # unused private symbols
+
+  settings:
+    errcheck:
+      # Deliberate ignores. Each of these is a place where the error genuinely
+      # has nowhere to go, and where I've already written a comment saying so:
+      #   - tx.Rollback after Commit returns ErrTxClosed by design
+      #   - w.Write on an HTTP response: the client is already gone
+      #   - test cleanup Exec calls
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - (github.com/jackc/pgx/v5.Tx).Rollback
+
+  exclusions:
+    rules:
+      # Test files get a lighter touch: an unchecked Exec in a cleanup helper
+      # is noise, not a bug.
+      - path: _test\.go
+        linters:
+          - errcheck

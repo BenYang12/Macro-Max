@@ -167,7 +167,9 @@ func upsertFoods(ctx context.Context, tx pgx.Tx) (map[string]int64, error) {
 		// QueryRow reads the NEXT queued result. RETURNING id made each one a
 		// single-row result, so QueryRow (not Exec) is the right reader.
 		if err := results.QueryRow().Scan(&id); err != nil {
-			results.Close() // close before returning, or the tx is left wedged
+			// _ = because I am already returning a more useful error; the close
+			// is here only to unwedge the transaction, not to be checked.
+			_ = results.Close()
 			return nil, fmt.Errorf("upserting food %q: %w", f.Name, err)
 		}
 		foodIDs[f.Name] = id
@@ -249,7 +251,7 @@ func upsertProducts(ctx context.Context, tx pgx.Tx, foodIDs map[string]int64) (i
 	// for a row that doesn't exist would error.
 	for i := 0; i < queued; i++ {
 		if _, err := results.Exec(); err != nil {
-			results.Close()
+			_ = results.Close() // same as above: unwedge the tx, keep the real error
 			return 0, fmt.Errorf("upserting product #%d: %w", i, err)
 		}
 	}

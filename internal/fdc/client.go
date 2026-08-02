@@ -205,7 +205,10 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, dst an
 	// connection, and the pool eventually starves. defer it immediately after
 	// the error check — never before (resp is nil on error) and never later
 	// (an early return would skip it).
-	defer resp.Body.Close()
+	// The _ = is for errcheck: closing a response body can technically fail,
+	// and there is nothing useful to do about it inside a defer. Being explicit
+	// beats an exclusion rule that would also hide closes I DO care about.
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		// Read a bounded amount of the error body for the message.

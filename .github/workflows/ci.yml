@@ -105,6 +105,20 @@ jobs:
         # tags. Cheap to run, occasionally saves a debugging session.
         run: go vet ./...
 
+      - name: Lint
+        # golangci-lint runs several analyzers in one pass (errcheck,
+        # staticcheck, unused, ...) driven by .golangci.yml, so CI and my
+        # laptop check exactly the same rules. It's a SUPERSET of vet, but I
+        # keep the vet step above anyway: it's seconds-fast and pins down
+        # which layer failed when both go red.
+        #
+        # The version is pinned for the same reason golang-migrate is — an
+        # unpinned "latest" means a new release can turn my build red on a
+        # commit that didn't touch any code.
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.2
+
       - name: Install golang-migrate
         # Pinned to the same version I run locally. An unpinned "latest" would
         # mean CI silently changes underneath me on someone else's release
