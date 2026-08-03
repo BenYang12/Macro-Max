@@ -1,38 +1,4 @@
-"""The Phase 3 linear program: cheapest basket that hits my macro targets.
-
-This module is deliberately PURE. `solve(request) -> response` takes a protobuf
-message and returns a protobuf message, and touches no network, no clock I
-depend on, and no global state. That means my pytest suite can exercise the
-actual optimization math without starting a gRPC server — the same separation I
-used in Go between `internal/fdc/normalize.py`-style pure functions and the HTTP
-client. The server (server.py) is a thin shell that only does transport.
-
-WHAT A LINEAR PROGRAM ACTUALLY IS, in the terms I need to hold in my head:
-
-I have a set of DECISION VARIABLES (how many grams of each food to buy). I have
-CONSTRAINTS, each a linear inequality over those variables ("total protein must
-be at least 1120g"). And I have an OBJECTIVE, also linear ("minimize total
-cost"). An LP solver finds the assignment of variables that satisfies every
-constraint while making the objective as small as possible — and, crucially,
-PROVES no better assignment exists.
-
-That proof is the entire reason this project uses a solver instead of an LLM.
-An LLM can suggest a plausible grocery list. It cannot tell me that no cheaper
-list exists. "Linear" is the price of that guarantee: every relationship has to
-be a weighted sum, no multiplying two variables together, no if-statements.
-Almost everything I want here happens to be linear (cost is price x grams,
-protein is rate x grams), which is why this works at all.
-
-WHY THIS PHASE PRODUCES A BAD ANSWER ON PURPOSE:
-
-With only "hit the macros, minimize cost", the optimizer will find the three or
-four cheapest sources of protein/carbs/fat and buy nothing else. That's the
-Stigler diet result from 1945 — mathematically optimal, humanly inedible. I
-seeded cheap whey, canola oil, and rice specifically so this shows up. Seeing
-that ugly basket is the POINT of Phase 3: it's the demonstration of why Phase
-4's variety constraints have to exist. If this phase returned something
-appetizing, I'd have no evidence the hard part is necessary.
-"""
+"""Continuous least-cost diet model used as the MILP baseline."""
 
 import time
 
@@ -40,37 +6,22 @@ from ortools.linear_solver import pywraplp
 
 from solver.v1 import solver_pb2
 
-# Defaults for options the caller left at zero. I keep them here rather than in
-# the proto because proto3 has no concept of a default other than the zero
-# value — so "unset" and "zero" are the same bytes on the wire, and SOMEBODY has
-# to decide what unset means. Better that it's the solver, which is the thing
-# that actually understands what a sensible portion size is.
+# Solver-side defaults for proto fields left at zero.
 DEFAULT_MIN_PORTION_GRAMS = 200.0
 DEFAULT_DIVERSITY_LAMBDA = 0.05
 DEFAULT_MAX_KCAL_SHARE = 0.30
 DEFAULT_TIME_LIMIT_SECONDS = 10.0
 
-# When the caller sends calories_max = 0 ("no explicit ceiling"), I derive one
-# from the macros themselves using Atwater factors, plus headroom. Without ANY
-# calorie ceiling the LP has no reason not to buy unlimited cheap fat, since fat
-# satisfies the fat constraint and nothing pushes back.
+# Derive a calorie ceiling from Atwater factors when none is supplied.
 ATWATER_KCAL_PER_G = {"protein": 4.0, "carbs": 4.0, "fat": 9.0}
 DERIVED_CALORIE_HEADROOM = 1.1
 
-# An upper bound applied to any food with max_grams_week = 0 (uncapped). A
-# truly unbounded variable can make an LP unbounded or produce absurd answers
-# like 400kg of rice, so I cap everything at something no human would exceed in
-# a week. 20kg is generous enough to never bind on a real solve.
+# Finite fallback bound for otherwise uncapped food variables.
 FALLBACK_MAX_GRAMS_WEEK = 20_000.0
 
 
 def _resolve_options(opts):
-    """Fill in solver-side defaults for any option left at its zero value.
-
-    I do this once, up front, rather than scattering `or DEFAULT` through the
-    model-building code. When I later want to know what parameters a solve
-    actually ran with, there's exactly one place that decided.
-    """
+    """Fill solver-side defaults for options left at zero."""
     return {
         "integer_packs": opts.integer_packs,
         "min_portion_grams": opts.min_portion_grams or DEFAULT_MIN_PORTION_GRAMS,

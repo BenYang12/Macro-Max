@@ -1,52 +1,14 @@
-"""The Phase 4 mixed-integer program: a basket a human would actually eat.
+"""Whole-pack MILP with category, variety, and concentration constraints.
 
-Phase 3's LP was correct and useless. It bought lentils, whey, and peanut butter
-because those are the cheapest sources of each macro, and it had no way to
-express "but I have to eat this every day for a week." This module adds the
-constraints that encode edibility, and in doing so changes the problem class.
-
-WHAT "MIXED-INTEGER" MEANS AND WHY IT COSTS SO MUCH MORE:
-
-An LP's feasible region is a continuous convex shape, and simplex walks its
-corners to an optimum in what is effectively linear time for my problem size.
-The moment I require a variable to be a whole number, that shape becomes a
-lattice of disconnected points, and there's no walking between them. The solver
-has to BRANCH: fix a variable to 0, solve; fix it to 1, solve; recurse. That's
-exponential in the worst case, which is why MILP is NP-hard while LP is not.
-
-In practice a good solver prunes most of that tree using bounds — if the best
-possible answer in a branch is already worse than a solution I have, the whole
-branch dies unexplored. That's branch-and-bound, and it's why my ~43-product
-model solves in well under a second despite the theory being frightening.
-
-WHY I SWITCH ENGINES FROM GLOP TO SCIP:
-
-GLOP is a pure simplex implementation. It has no branching machinery at all, so
-asking it for an integer variable gets me a continuous one back with no error —
-a silent, catastrophic bug. SCIP is a real branch-and-cut solver and is what
-OR-Tools ships for mixed-integer work.
-
-THE FOUR VARIABLE FAMILIES, and why each has to exist:
-
-  n_i  integer   packs of product i to BUY.        Cost comes from here.
-  g_i  continuous grams of product i to EAT.       Macros come from here.
-  y_f  binary    is food f meaningfully used?      Variety counting needs this.
-  o_f  continuous grams of food f beyond its       The monotony tax.
-                 concentration threshold.
-
-Separating "bought" from "eaten" is the subtle one, and it's what makes the
-answer honest: I buy a 10 lb bag of rice but eat 3 kg of it, and the leftover is
-real. Phase 3 conflated the two and therefore lied about both.
+Integer pack variables determine cost while continuous consumed grams determine
+nutrition, preserving the difference between groceries bought and food eaten.
 """
 
 import time
 
 from ortools.linear_solver import pywraplp
 
-# Shared with the LP: validation, the derived calorie ceiling, option defaults.
-# The import goes ONE WAY (milp -> lp) so there's no cycle; the dispatch between
-# the two lives in server.py, which is the only place that needs to know both
-# exist.
+# Shared validation, calorie ceiling, and option defaults.
 from lp import (
     FALLBACK_MAX_GRAMS_WEEK,
     _calorie_ceiling,
@@ -68,7 +30,7 @@ MAX_PACKS_PER_PRODUCT = 30
 
 
 def solve(request):
-    """Solve the Phase 4 MILP. Returns a SolveResponse."""
+    """Solve the whole-pack MILP."""
     started = time.monotonic()
 
     problem = _validate(request)

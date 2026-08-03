@@ -1,58 +1,22 @@
-// This file is the CONTRACT between my Go API and my Python solver.
-//
-// Up to now every piece of this project has been Go talking to Go, where the
-// compiler checks my types for me. That stops working the moment a second
-// language enters. So instead of trusting two codebases to agree by hand, I
-// write the shape ONCE here, and generate both the Go and the Python types
-// from it. If I change a field name, both sides stop compiling until I fix
-// them. That's the whole reason protobuf exists, and it's why I'm paying the
-// toolchain cost of buf + codegen rather than just sending JSON over HTTP.
-//
-// The other reason I'm choosing gRPC over a JSON endpoint: this call is
-// internal, chatty, and latency-sensitive (I'll send ~50 foods and wait on a
-// solve). gRPC gives me binary encoding, HTTP/2 multiplexing, and generated
-// clients with real types. For my PUBLIC API I keep JSON, because that's what
-// browsers speak. Different boundary, different tool.
+// Contract between the Go API and Python solver. Generated stubs are committed.
 
 syntax = "proto3";
 
-// The package name is versioned from day one: solver.v1. When I inevitably
-// need a breaking change, I add solver/v2/ alongside instead of mutating this
-// file out from under a running service. Versioning after the fact is painful;
-// versioning up front costs nothing.
 package solver.v1;
 
 // go_package tells protoc-gen-go which Go import path the generated code
 // belongs to. It must match where the files actually land, or my imports break.
 option go_package = "github.com/BenYang12/Macro-Max/internal/gen/solver/v1;solverv1";
 
-// SolverService is the only service here. One RPC for now; Phase 4 reuses this
-// exact signature and just flips options.integer_packs to true, which is
-// deliberate — I want the MILP upgrade to be a solver-side change, not a new
-// contract.
 service SolverService {
   rpc Solve(SolveRequest) returns (SolveResponse);
 }
 
-// ---------------------------------------------------------------------------
-// UNITS — the part I have to get right or everything downstream is silently
-// wrong. I'm writing these down here because this file is the boundary where
-// my Go conventions have to be restated for a Python program that has never
-// read my CLAUDE.md.
-//
-//   Money   -> int64 CENTS. Never a float. Same law as everywhere else in
-//              this project.
+// Units at this boundary:
+//   Money   -> int64 cents.
 //   Mass    -> double GRAMS.
-//   Macros  -> double PER GRAM, not per 100g. My database stores per-100g
-//              (because that's how USDA publishes), and my Go code divides by
-//              100 exactly once, right before filling in this message. The
-//              solver must never see the number 100 — if it did, I'd have two
-//              places that know about the conversion, and eventually they'd
-//              disagree.
-//   Period  -> WEEKLY totals. My users enter daily targets; my Go handler
-//              multiplies by 7 before it gets here. The solver has no concept
-//              of a day.
-// ---------------------------------------------------------------------------
+//   Macros  -> double per gram.
+//   Period  -> weekly totals.
 
 // MacroTargets are WEEKLY totals the basket must satisfy.
 message MacroTargets {

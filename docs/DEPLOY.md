@@ -1,193 +1,93 @@
-# Deploying MacroCart
+# Deployment
 
-**Status: prepared, not deployed.** Every config file described here is written
-and reviewed; none of it has been run. `fly launch` and `vercel deploy` create
-billable infrastructure, so that stays a deliberate decision rather than a side
-effect of finishing Phase 7.
+Macro-Max deploys as three services:
 
----
+- Go API on Fly.io
+- private Python solver on Fly.io
+- Next.js frontend on Vercel
 
-## The shape of it
+Postgres and Redis are runtime dependencies. The only supported product catalog is Harris Teeter at University Place, Kroger location `09700117`.
 
-Three pieces, three places, chosen by what each one actually needs:
+## 1. Deploy the solver and API
 
-| Piece | Where | Why there |
-|---|---|---|
-| Go API | Fly.io (`macrocart-api`) | Needs a private network to reach the solver, and Fly's `*.internal` DNS gives that for free |
-| Python solver | Fly.io (`macrocart-solver`) | Same private network. **No public IP** — see below |
-| Next.js frontend | Vercel | It's a Next app; Vercel is the first-party host and the free tier covers it |
-| Postgres | Fly Postgres | Colocated with the API — a cross-provider database call on every request is latency for nothing |
-| Redis | Fly Redis (Upstash) | Cache only. Losing it costs recomputed solves, nothing more |
-
-The two Fly apps are separate rather than two processes in one app, because they
-scale on different axes. The API is I/O-bound and cheap; the solver is CPU- and
-memory-bound. Coupling them means paying for solver-sized machines to serve
-health checks.
-
-### The solver has no public address, on purpose
-
-`solver/fly.toml` has no `[http_service]` block, so Fly assigns it no public IP.
-The only way to reach it is the private network, where the API addresses it as
-`macrocart-solver.internal:50051`.
-
-This matters because **the solver has no authentication of any kind.** It trusts
-whoever can open a socket to it. The network boundary *is* the security model.
-If it ever needs a public address, it needs authentication first — in that
-order, not the other way around.
-
----
-
-## Files
-
-| File | What it does |
-|---|---|
-| `Dockerfile` | Multi-stage build of the Go API. Ships `api`, `seed`, and `krogeringest` |
-| `.dockerignore` | **Keeps `.env` out of the image.** Non-negotiable — see below |
-| `fly.toml` | The API app |
-| `solver/fly.toml` | The solver app |
-| `solver/Dockerfile` | Already existed (Phase 3) |
-
-### `.dockerignore` is a security control, not tidiness
-
-The Dockerfile does `COPY . .`. Without `.dockerignore`, that copies `.env` —
-every API key — into a build layer. Layers are immutable and travel with the
-image, so deleting the file in a later `RUN` does **not** remove it. Anyone who
-can pull the image can recover it with `docker history` or by unpacking the
-layer tarball.
-
-Docker has never read `.gitignore`. The two files are unrelated and their
-contents legitimately differ.
-
----
-
-## Deploy order
-
-The order matters — each step depends on the one before it.
-
-### 1. Solver first
-
-The API's health check doesn't depend on the solver, but a deployed API with no
-solver serves 404 on `/v1/solve`, which is the whole product.
+Create the Fly apps and managed data services, then configure the API secrets:
 
 ```bash
 fly apps create macrocart-solver
-fly deploy --config solver/fly.toml --dockerfile solver/Dockerfile
-```
-
-### 2. Data stores
-
-```bash
 fly apps create macrocart-api
-fly postgres create --name macrocart-db --region iad
-fly postgres attach macrocart-db --app macrocart-api   # sets DATABASE_URL
-fly redis create                                       # sets REDIS_URL
-```
+fly postgres create --name macrocart-db
+fly postgres attach macrocart-db --app macrocart-api
+fly redis create
 
-`attach` sets `DATABASE_URL` as a secret automatically. Don't set it by hand.
-
-### 3. Secrets
-
-```bash
 fly secrets set --app macrocart-api \
-  FDC_API_KEY=... \
   KROGER_CLIENT_ID=... \
   KROGER_CLIENT_SECRET=... \
-  ANTHROPIC_API_KEY=... \
-  TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+  WEB_APP_URL=https://YOUR-PROJECT.vercel.app
 ```
 
-**`TOKEN_ENCRYPTION_KEY` is permanent once set.** It encrypts stored Kroger
-refresh tokens; changing it makes every already-stored token undecryptable, and
-the only recovery is sending users back through Kroger's consent screen.
-
-Secrets never go in `fly.toml` — that file is committed. `fly secrets` encrypts
-them at rest and injects them as environment variables at boot, which is exactly
-what `internal/config` already reads.
-
-### 4. API
+Optional API secrets:
 
 ```bash
-fly deploy --app macrocart-api
+fly secrets set --app macrocart-api FDC_API_KEY=... ANTHROPIC_API_KEY=...
 ```
 
-### 5. Schema and data
-
-Migrations ship inside the image, so run them from a machine that has them:
+Deploy the solver first so the API can reach `macrocart-solver.internal:50051`:
 
 ```bash
-fly ssh console --app macrocart-api
-# inside:
-migrate -path /migrations -database "$DATABASE_URL" up
-seed
-krogeringest -location 09700117
+fly deploy --config solver/fly.toml
+fly deploy
 ```
 
-### 6. Frontend
+Apply migrations 1–5 to the production database, seed the food catalog, and run the Kroger importer once. There is no Kroger token table and no token-encryption secret.
 
-```bash
-cd web
-vercel                       # first run links the project
-vercel env add API_URL       # https://macrocart-api.fly.dev   <- NO /v1
-vercel --prod
+## 2. Deploy the frontend
+
+Import `web/` as a Vercel project and set:
+
+```text
+API_URL=https://macrocart-api.fly.dev
+NEXT_PUBLIC_KROGER_CART=true
 ```
 
-`web/next.config.ts` already reads `API_URL` for its rewrite destination, so no
-code change is needed — the proxy that avoids CORS locally does the same job in
-production.
+Only if recipes are configured on the API, also set:
 
-**`API_URL` is an origin, not a base path.** The rewrite is
-`${API_URL}/v1/:path*`, so it appends `/v1` itself. Including `/v1` in the env
-var produces `/v1/v1/solve` and a 404 on every call.
-
-### 7. Point Kroger at the deployed callback
-
-On the Kroger developer app, add:
-
-```
-https://macrocart-api.fly.dev/v1/kroger/callback
+```text
+NEXT_PUBLIC_ANTHROPIC_RECIPES=true
 ```
 
-and set `KROGER_REDIRECT_URI` in `fly.toml` to the identical string.
-**Identical** means scheme, host, port, path, and trailing slash. A mismatch is
-the most common OAuth failure and Kroger's error won't say which part disagreed.
+Use the final Vercel production origin as `WEB_APP_URL` on Fly. It must be an origin only: HTTPS scheme and host, with no path, query, fragment, or trailing application route.
 
----
+## 3. Register the Kroger callback
 
-## What will actually go wrong
+Register the frontend-origin callback exactly:
 
-Roughly in order of likelihood.
+```text
+https://YOUR-PROJECT.vercel.app/api/kroger/callback
+```
 
-**`x509: certificate signed by unknown authority`** — the runtime image is
-missing CA certificates. This is why the Dockerfile's final stage is `alpine`
-with `ca-certificates` rather than `scratch`. It looks like a certificate
-problem; it's a missing-file problem.
+The Vercel app proxies that path to the Go callback. Kroger redirect matching is exact, including scheme, host, and path. Enable `cart.basic:write` for the developer application.
 
-**Kroger OAuth fails with a generic error after deploying** — `redirect_uri`
-mismatch, nine times out of ten. Compare the registered value and
-`KROGER_REDIRECT_URI` character by character.
+Macro-Max does not store Kroger accounts or OAuth tokens. Each cart fill starts a new authorization, uses its access token during the callback, and discards it.
 
-**The API can't reach the solver** — check the region. `SOLVER_ADDR` uses
-`*.internal`, which only resolves inside the Fly organization, and both apps
-must be in the same `primary_region` or every solve pays a cross-region round
-trip.
+## 4. Schedule price refreshes
 
-**Solve times out after idle** — the API scales to zero; the solver deliberately
-does not (`min_machines_running = 1`). A cold OR-Tools import is seconds, long
-enough to exceed the gRPC deadline. If the solver ever gets `auto_stop`, this
-becomes an intermittent failure that's very hard to reproduce.
+Configure the GitHub repository:
 
-**Deploys hang for the full grace period** — a `CMD` written in shell form
-instead of exec form. The shell doesn't forward `SIGTERM`, so the graceful
-shutdown in `cmd/api/main.go` never runs. The Dockerfile uses the JSON-array
-form for exactly this reason.
+| Setting | Kind | Value |
+|---|---|---|
+| `FLY_API_TOKEN` | Actions secret | App-scoped Fly SSH token |
+| `MACRO_MAX_FLY_API_APP` | Actions variable | API app name, such as `macrocart-api` |
 
----
+The scheduled workflow runs the importer for location `09700117`; no location variable is accepted. Dispatch it once with **dry run** enabled, review the mappings, then dispatch a real ingest before relying on the schedule.
 
-## Cost
+## Production checks
 
-Scale-to-zero on the API plus a single always-on solver machine should sit near
-Fly's free allowance for a portfolio project's traffic. The solver's
-`min_machines_running = 1` is the one line with a standing cost, and it buys
-solves that don't time out.
+1. `fly status --app macrocart-solver` reports a healthy private solver.
+2. `fly status --app macrocart-api` reports a passing `/v1/healthcheck` check.
+3. The Vercel UI displays the University Place address and returns an optimized basket.
+4. A low budget reports the minimum feasible amount.
+5. A dry-run price refresh succeeds, followed by one real refresh.
+6. Kroger OAuth returns through the Vercel callback and fills one deliberately small cart.
+7. Recipe generation appears only when both recipe settings are configured.
 
-Vercel's hobby tier covers the frontend.
+Cart writes are additive and cannot be undone through the public Kroger API.
