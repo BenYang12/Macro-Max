@@ -17,16 +17,11 @@ export
 # that agree on the fallback.
 DATABASE_URL ?= postgres://macrocart:macrocart@localhost:5432/macrocart?sslmode=disable
 
-# Same ?= fallback rule, so `make kroger-stores` works before .env defines a
-# zip. Must agree with the default in internal/config/config.go.
-KROGER_ZIP ?= 27514
-KROGER_LOCATION_ID ?= 09700117
-
 # .PHONY tells make these targets are commands, not files it should build.
 # Without it, creating a file literally named "test" would break `make test`
 # (make would see the file exists and say "nothing to do").
-.PHONY: run lint test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry proto solver-test solver-up solver-logs solver-shell kroger-stores kroger-dry kroger-ingest web web-install web-build \
-        kroger-connect docker-build docker-verify
+.PHONY: run lint test test-int seed up down down-v psql logs migrate-new migrate-up migrate-down fdc-suggest fdc-import fdc-dry proto solver-test solver-up solver-logs solver-shell kroger-dry kroger-ingest web web-install web-build \
+        docker-build docker-verify
 
 ## Development loop
 
@@ -94,7 +89,7 @@ migrate-up:     # apply everything not applied yet
 migrate-down:   # undo exactly ONE migration (the most recent) — deliberate, not "down all"
 	migrate -path migrations -database "$(DATABASE_URL)" down 1
 
-## USDA FoodData Central import (Phase 2)
+## USDA FoodData Central import
 ## Needs FDC_API_KEY in .env — get one free at
 ## https://fdc.nal.usda.gov/api-key-signup.html
 
@@ -107,7 +102,7 @@ fdc-import:     # apply the curated mapping in cmd/fdcimport/mapping.go
 fdc-dry:        # same as fdc-import but writes nothing — always run this first
 	go run ./cmd/fdcimport -all -dry-run
 
-## Solver (Phase 3) — Python OR-Tools over gRPC
+## Python OR-Tools solver over gRPC
 
 proto:          # regenerate Go AND Python stubs from proto/solver/v1/solver.proto.
                 # Both languages come out of ONE command, which is the whole
@@ -129,31 +124,19 @@ solver-logs:    # tail the solver's logs (every solve logs its status and timing
 solver-shell:   # a shell inside the solver container, for poking at imports
 	docker compose exec solver /bin/sh
 
-## Kroger price ingestion (Phase 5)
+## Kroger price ingestion for University Place (09700117)
 ## Needs KROGER_CLIENT_ID and KROGER_CLIENT_SECRET in .env.
-
-kroger-stores:  # find stores near KROGER_ZIP and print their locationIds.
-                # Read-only — makes one API call and writes nothing. Run this
-                # first, then paste the locationId into .env.
-	go run ./cmd/krogeringest -zip "$(KROGER_ZIP)"
 
 kroger-dry:     # fetch and parse everything, print what WOULD be written.
                 # Always run this before a real ingest: it shows which products
                 # matched, which were skipped, and why.
-                # Fails fast with a clear message if the locationId isn't set,
-                # rather than sending an empty one to Kroger and getting a
-                # confusing 400 back.
-	@test -n "$(KROGER_LOCATION_ID)" || \
-		(echo "KROGER_LOCATION_ID is not set. Run 'make kroger-stores' and put a locationId in .env"; exit 1)
-	go run ./cmd/krogeringest -location "$(KROGER_LOCATION_ID)" -dry-run
+	go run ./cmd/krogeringest -dry-run
 
 kroger-ingest:  # the real thing: upsert products, append price history on
                 # change, mark vanished SKUs unavailable.
-	@test -n "$(KROGER_LOCATION_ID)" || \
-		(echo "KROGER_LOCATION_ID is not set. Run 'make kroger-stores' and put a locationId in .env"; exit 1)
-	go run ./cmd/krogeringest -location "$(KROGER_LOCATION_ID)"
+	go run ./cmd/krogeringest
 
-## Frontend (Phase 6) — Next.js on :3000
+## Next.js frontend on :3000
 ## Needs `make run` in another terminal: the web app proxies /api/* to :4000.
 
 web-install:    # first-time setup (or after pulling package.json changes)
@@ -165,19 +148,7 @@ web:            # start the Next dev server with hot reload
 web-build:      # production build + typecheck, the same thing CI would run
 	cd web && npm run build
 
-## Phase 7 — recipes, cart, and deployment
-
-kroger-connect: # print the URL to open in a browser to grant cart access.
-                # The authorize endpoint 302s to Kroger's login page, so this
-                # has to be a real browser visit — curl would just follow the
-                # redirect and fetch HTML nobody sees. `open` hands it to the
-                # default browser on macOS.
-                #
-                # Needs cart.basic:write on the Kroger developer app and a
-                # registered redirect URI matching KROGER_REDIRECT_URI exactly.
-	@echo "Opening the Kroger consent screen. Make sure 'make run' is up."
-	open "http://localhost:$(PORT)/v1/kroger/authorize" || \
-		echo "Open this yourself: http://localhost:$(PORT)/v1/kroger/authorize"
+## Deployment checks
 
 docker-build:   # build the API image exactly as a deploy would.
                 # Worth running before any deploy: it catches the whole class of
