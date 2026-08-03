@@ -1,5 +1,4 @@
--- products: a purchasable item — one pack size of one food at one store.
--- Phase 1 uses fake products (store_id = 'SEED'); Phase 5 adds real Kroger.
+-- products: a purchasable pack of one food at one store.
 
 CREATE TABLE products (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -9,7 +8,7 @@ CREATE TABLE products (
     -- Also, deleting a food that still has products is refused
     food_id BIGINT NOT NULL REFERENCES foods(id),
 
-    -- Kroger locationId, or the literal 'SEED' for our fake dev products.
+    -- Kroger locationId.
     store_id TEXT NOT NULL,
 
     -- The store's own id for this product (Kroger productId).
@@ -40,7 +39,7 @@ CREATE TABLE products (
     fetched_at timestamptz NOT NULL DEFAULT now(),
 
     -- Composite UNIQUE: "this store's catalog entry". This is the upsert key
-    -- for Phase 5 ingestion: ON CONFLICT (store_id, external_id) DO UPDATE.
+    -- Idempotent ingestion uses this pair as its upsert key.
     UNIQUE (store_id, external_id)
 );
 

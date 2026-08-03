@@ -1,316 +1,293 @@
 package handler
 
-// cart.go — the three endpoints that put a solved basket into a real cart.
-//
-//	GET  /v1/kroger/authorize   send the user to Kroger to grant access
-//	GET  /v1/kroger/callback    Kroger sends them back here with a code
-//	POST /v1/kroger/cart        add the latest basket to their cart
-//
-// The first two are pure OAuth plumbing; the third is the one that does
-// something. Splitting them this way means the interesting endpoint contains no
-// OAuth at all — it asks for a valid token and gets one, or gets told to go
-// authorize. That separation is worth more than the extra route.
-//
-// THE HONEST CAVEAT, stated here because it shapes the design below: Kroger's
-// cart API is write-only and additive. There is no way to read the cart back,
-// no way to remove what I added, and calling add twice doubles the quantities.
-// So this endpoint cannot be idempotent no matter how I write it, and the
-// response says so rather than pretending otherwise.
-
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
-	"log"
+	"fmt"
+	"io"
 	"net/http"
-	"sync"
+	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
-	"github.com/BenYang12/Macro-Max/internal/crypt"
 	"github.com/BenYang12/Macro-Max/internal/kroger"
 	"github.com/BenYang12/Macro-Max/internal/store"
 )
 
-// CartStore is this handler's slice of the database.
+const (
+	cartStateTTL       = 10 * time.Minute
+	maxCartStateLength = 1024
+	cartNonceBytes     = 16
+	cartNonceCookie    = "macro_max_cart_nonce"
+)
+
+var (
+	krogerProductIDPattern = regexp.MustCompile(`^[0-9]{8,14}$`)
+	errExpiredCartState    = errors.New("expired cart state")
+)
+
 type CartStore interface {
 	LatestBasketForTarget(ctx context.Context, targetID int64) (store.Basket, []store.BasketLine, error)
-	GetKrogerToken(ctx context.Context, box *crypt.Box, accountKey string) (store.KrogerToken, error)
-	SaveKrogerToken(ctx context.Context, box *crypt.Box, accountKey string, t store.KrogerToken) error
+	BasketByIDForTarget(ctx context.Context, basketID, targetID int64) (store.Basket, []store.BasketLine, error)
 }
 
-// CartClient is the Kroger dependency behind an interface, so the tests below
-// never open a socket or need a developer account.
 type CartClient interface {
 	AuthorizeURL(redirectURI, state string) string
 	ExchangeCode(ctx context.Context, code, redirectURI string) (kroger.UserToken, error)
-	RefreshUserToken(ctx context.Context, refreshToken string) (kroger.UserToken, error)
 	AddToCart(ctx context.Context, accessToken string, items []kroger.CartItem) error
 }
 
+type cartState struct {
+	TargetID int64  `json:"target_id"`
+	BasketID int64  `json:"basket_id"`
+	Expires  int64  `json:"expires"`
+	Nonce    string `json:"nonce"`
+}
+
 type CartHandler struct {
-	Store       CartStore
-	Kroger      CartClient
-	Box         *crypt.Box
-	RedirectURI string
-
-	// PENDING STATE, in memory.
-	//
-	// The `state` parameter has to survive between the authorize redirect and
-	// the callback, and a map is honest for a single-user, single-process app.
-	// It does mean a server restart mid-flow invalidates an in-progress
-	// authorization — which is a five-second annoyance (click the link again),
-	// not data loss, and it is the correct trade against a Redis round trip and
-	// another moving part.
-	//
-	// The mutex is NOT optional even here. Two browser tabs are enough to race
-	// this, and a concurrent map write in Go is not a subtle corruption — the
-	// runtime detects it and kills the process.
-	mu      sync.Mutex
-	pending map[string]time.Time
+	Store        CartStore
+	Kroger       CartClient
+	RedirectURI  string
+	WebAppURL    *url.URL
+	stateKey     []byte
+	secureCookie bool
+	now          func() time.Time
 }
 
-func NewCartHandler(s CartStore, k CartClient, box *crypt.Box, redirectURI string) *CartHandler {
-	return &CartHandler{
-		Store:       s,
-		Kroger:      k,
-		Box:         box,
-		RedirectURI: redirectURI,
-		pending:     make(map[string]time.Time),
-	}
-}
-
-// stateTTL bounds how long an authorization may sit half-finished. Long enough
-// to log in and read a consent screen, short enough that an abandoned attempt
-// doesn't linger as a valid credential.
-const stateTTL = 10 * time.Minute
-
-// Authorize handles GET /v1/kroger/authorize by redirecting to Kroger.
-func (h *CartHandler) Authorize(w http.ResponseWriter, r *http.Request) {
-	state, err := kroger.NewState()
+func NewCartHandler(s CartStore, k CartClient, clientSecret, webAppURL string) (*CartHandler, error) {
+	webURL, err := validateOriginURL("WEB_APP_URL", webAppURL)
 	if err != nil {
-		serverErrorResponse(w, err)
-		return
+		return nil, err
 	}
+	redirectURI := webURL.Scheme + "://" + webURL.Host + "/api/kroger/callback"
 
-	h.mu.Lock()
-	// Sweep expired entries on the way past. A background goroutine would be
-	// the "proper" answer, but this map gains an entry only when a human clicks
-	// a link — opportunistic cleanup at the one place entries are created is
-	// exactly proportionate, and it can't leak a goroutine.
-	now := time.Now()
-	for s, t := range h.pending {
-		if now.Sub(t) > stateTTL {
-			delete(h.pending, s)
-		}
-	}
-	h.pending[state] = now
-	h.mu.Unlock()
-
-	// 302, not JSON. This endpoint is meant to be opened in a browser — it's
-	// the one route in the API a human visits directly rather than a client
-	// calling it — so the useful response is a redirect they can follow.
-	http.Redirect(w, r, h.Kroger.AuthorizeURL(h.RedirectURI, state), http.StatusFound)
+	derive := hmac.New(sha256.New, []byte(clientSecret))
+	_, _ = derive.Write([]byte("macro-max:kroger-cart-state:v1"))
+	return &CartHandler{Store: s, Kroger: k, RedirectURI: redirectURI, WebAppURL: webURL,
+		stateKey: derive.Sum(nil), secureCookie: webURL.Scheme == "https", now: time.Now}, nil
 }
 
-// Callback handles GET /v1/kroger/callback, where Kroger returns the user.
-func (h *CartHandler) Callback(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-
-	// Kroger reports a declined consent as ?error=access_denied rather than by
-	// omitting the code. Checking it first means "I clicked Deny" produces a
-	// message saying so, instead of a confusing "missing code".
-	if e := q.Get("error"); e != "" {
-		errorResponse(w, http.StatusBadRequest, "authorization_denied",
-			"Kroger did not grant access: "+e)
-		return
+func validateOriginURL(name, raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("%s must be an absolute http or https URL", name)
 	}
-
-	code, state := q.Get("code"), q.Get("state")
-	if code == "" || state == "" {
-		errorResponse(w, http.StatusBadRequest, "bad_request",
-			"callback is missing the code or state parameter")
-		return
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return nil, fmt.Errorf("%s must be an origin without credentials, path, query, or fragment", name)
 	}
-
-	// THE CSRF CHECK. Consuming the state — delete, not just read — is what
-	// makes a replayed callback fail: the value is good for exactly one
-	// redemption, so capturing a callback URL from a log buys nothing.
-	h.mu.Lock()
-	issued, ok := h.pending[state]
-	delete(h.pending, state)
-	h.mu.Unlock()
-
-	if !ok {
-		errorResponse(w, http.StatusBadRequest, "invalid_state",
-			"this authorization did not originate here, or it was already used — start again at /v1/kroger/authorize")
-		return
-	}
-	if time.Since(issued) > stateTTL {
-		errorResponse(w, http.StatusBadRequest, "expired_state",
-			"this authorization took too long — start again at /v1/kroger/authorize")
-		return
-	}
-
-	tok, err := h.Kroger.ExchangeCode(r.Context(), code, h.RedirectURI)
-	if err != nil {
-		serverErrorResponse(w, err)
-		return
-	}
-
-	if err := h.Store.SaveKrogerToken(r.Context(), h.Box, store.DefaultAccountKey, store.KrogerToken{
-		AccessToken:  tok.AccessToken,
-		RefreshToken: tok.RefreshToken,
-		ExpiresAt:    tok.ExpiresAt,
-		Scope:        tok.Scope,
-	}); err != nil {
-		serverErrorResponse(w, err)
-		return
-	}
-
-	// The response says what was granted and what to do next, and deliberately
-	// contains NO PART of the token. A browser lands on this page; its URL and
-	// body end up in history, screenshots, and bug reports.
-	if err := writeJSON(w, http.StatusOK, envelope{
-		"connected": map[string]any{
-			"scope":      tok.Scope,
-			"expires_at": tok.ExpiresAt,
-			"next":       "POST /v1/kroger/cart with a target_id to fill your cart",
-		},
-	}); err != nil {
-		serverErrorResponse(w, err)
-	}
+	u.Path = ""
+	return u, nil
 }
 
-type addToCartRequest struct {
+type authorizeCartRequest struct {
 	TargetID *int64 `json:"target_id"`
 }
 
-// AddBasket handles POST /v1/kroger/cart.
-func (h *CartHandler) AddBasket(w http.ResponseWriter, r *http.Request) {
-	var req addToCartRequest
+func (h *CartHandler) Authorize(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != h.WebAppURL.Scheme+"://"+h.WebAppURL.Host {
+		errorResponse(w, http.StatusForbidden, "invalid_origin", "request origin is not allowed")
+		return
+	}
+	var req authorizeCartRequest
 	if err := readJSON(w, r, &req); err != nil {
 		badRequestResponse(w, err)
 		return
 	}
-	if req.TargetID == nil {
-		failedValidationResponse(w, map[string]string{"target_id": "must be provided"})
+	if req.TargetID == nil || *req.TargetID < 1 {
+		failedValidationResponse(w, map[string]string{"target_id": "must be a positive integer"})
 		return
 	}
-
-	ctx := r.Context()
-
-	accessToken, err := h.validToken(ctx)
+	basket, lines, err := h.Store.LatestBasketForTarget(r.Context(), *req.TargetID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			// 401 with a pointer to the fix. Not 403: the user isn't forbidden,
-			// they simply haven't connected an account yet, and the difference
-			// tells them whether to click a link or file a complaint.
-			errorResponse(w, http.StatusUnauthorized, "kroger_not_connected",
-				"no Kroger account is connected — visit /v1/kroger/authorize first")
+			failedValidationResponse(w, map[string]string{"target_id": "has no solved basket"})
 			return
 		}
 		serverErrorResponse(w, err)
 		return
 	}
-
-	_, lines, err := h.Store.LatestBasketForTarget(ctx, *req.TargetID)
+	if code := validateCartBasket(basket, lines); code != "" {
+		errorResponse(w, http.StatusUnprocessableEntity, code, "this basket cannot be added to Kroger")
+		return
+	}
+	state, nonce, err := h.signState(*req.TargetID, basket.ID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			failedValidationResponse(w, map[string]string{
-				"target_id": "this target has no solved basket yet — POST /v1/solve first",
-			})
-			return
-		}
 		serverErrorResponse(w, err)
 		return
 	}
-
-	items := make([]kroger.CartItem, 0, len(lines))
-	skipped := []string{}
-	for _, l := range lines {
-		if l.ExternalID == "" {
-			// A seeded product with no real Kroger id. Skipping it and SAYING
-			// SO beats both alternatives: failing the whole request over one
-			// line, or silently shipping an incomplete cart the user only
-			// discovers at the store.
-			skipped = append(skipped, l.ProductName)
-			continue
-		}
-		items = append(items, kroger.CartItem{
-			UPC:      l.ExternalID,
-			Quantity: l.Packs,
-			Modality: "PICKUP",
-		})
-	}
-
-	if len(items) == 0 {
-		failedValidationResponse(w, map[string]string{
-			"target_id": "no items in this basket have a Kroger product id — was it solved against seeded data rather than a live store?",
-		})
-		return
-	}
-
-	if err := h.Kroger.AddToCart(ctx, accessToken, items); err != nil {
-		serverErrorResponse(w, err)
-		return
-	}
-
-	body := map[string]any{
-		"items_added": len(items),
-		// The caveat, in the response rather than only in the docs. Kroger's
-		// add is additive with no way to read the cart back or undo, so a user
-		// who retries gets double — and they should learn that from the
-		// success message, not from a surprising receipt.
-		"note": "Items were ADDED to your Kroger cart. Calling this again will add them a second time; Kroger's API cannot read back or remove cart contents.",
-	}
-	if len(skipped) > 0 {
-		body["skipped"] = skipped
-	}
-
-	if err := writeJSON(w, http.StatusOK, envelope{"cart": body}); err != nil {
+	h.setNonceCookie(w, nonce, int(cartStateTTL/time.Second))
+	if err := writeJSON(w, http.StatusOK, envelope{"authorize_url": h.Kroger.AuthorizeURL(h.RedirectURI, state)}); err != nil {
 		serverErrorResponse(w, err)
 	}
 }
 
-// validToken returns a usable access token, refreshing it if it has expired.
-//
-// Extracted so AddBasket contains no OAuth: it asks for a token and either gets
-// one or gets an error it can map to a status. If a second cart endpoint ever
-// exists, this is already the shared piece.
-func (h *CartHandler) validToken(ctx context.Context) (string, error) {
-	stored, err := h.Store.GetKrogerToken(ctx, h.Box, store.DefaultAccountKey)
+func (h *CartHandler) Callback(w http.ResponseWriter, r *http.Request) {
+	rawState := r.URL.Query().Get("state")
+	state, err := h.verifyState(rawState)
 	if err != nil {
-		return "", err
+		code := "invalid_state"
+		if errors.Is(err, errExpiredCartState) {
+			code = "expired_state"
+		}
+		h.redirectResult(w, r, code)
+		return
+	}
+	cookie, err := r.Cookie(cartNonceCookie)
+	if err != nil || !constantTimeNonceEqual(cookie.Value, state.Nonce) {
+		h.redirectResult(w, r, "browser_mismatch")
+		return
+	}
+	// Consume browser binding before any external call. Replaying the callback
+	// in the same browser fails even if Kroger has not yet rejected the code.
+	h.setNonceCookie(w, "", -1)
+	if r.URL.Query().Get("error") != "" {
+		h.redirectResult(w, r, "authorization_denied")
+		return
+	}
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		h.redirectResult(w, r, "invalid_callback")
+		return
 	}
 
-	user := kroger.UserToken{
-		AccessToken:  stored.AccessToken,
-		RefreshToken: stored.RefreshToken,
-		ExpiresAt:    stored.ExpiresAt,
-		Scope:        stored.Scope,
+	tok, err := h.Kroger.ExchangeCode(r.Context(), code, h.RedirectURI)
+	if err != nil || tok.AccessToken == "" {
+		h.redirectResult(w, r, "token_exchange_failed")
+		return
 	}
-	if user.Valid() {
-		return user.AccessToken, nil
+	if !scopeContains(tok.Scope, kroger.ScopeCartWrite) {
+		h.redirectResult(w, r, "missing_cart_scope")
+		return
 	}
-
-	// Expired. The refresh token outlives the access token by months, so this
-	// is the ordinary path after ~30 minutes of idleness — not an error.
-	refreshed, err := h.Kroger.RefreshUserToken(ctx, stored.RefreshToken)
+	basket, lines, err := h.Store.BasketByIDForTarget(r.Context(), state.BasketID, state.TargetID)
 	if err != nil {
-		return "", err
+		if errors.Is(err, store.ErrNotFound) {
+			h.redirectResult(w, r, "basket_not_found")
+		} else {
+			h.redirectResult(w, r, "basket_load_failed")
+		}
+		return
 	}
-
-	// Persist the new token BEST-EFFORT. Failing the user's request because I
-	// couldn't write to the database would be backwards: I have a working token
-	// in hand and the cart add can proceed. The cost of the lost write is one
-	// extra refresh next time, which is not worth a failed request.
-	if err := h.Store.SaveKrogerToken(ctx, h.Box, store.DefaultAccountKey, store.KrogerToken{
-		AccessToken:  refreshed.AccessToken,
-		RefreshToken: refreshed.RefreshToken,
-		ExpiresAt:    refreshed.ExpiresAt,
-		Scope:        refreshed.Scope,
-	}); err != nil {
-		log.Printf("warning: refreshed the Kroger token but could not persist it: %v", err)
+	if result := validateCartBasket(basket, lines); result != "" {
+		h.redirectResult(w, r, result)
+		return
 	}
+	items := make([]kroger.CartItem, 0, len(lines))
+	for _, line := range lines {
+		items = append(items, kroger.CartItem{UPC: line.ExternalID, Quantity: line.Packs, Modality: "PICKUP"})
+	}
+	if err := h.Kroger.AddToCart(r.Context(), tok.AccessToken, items); err != nil {
+		h.redirectResult(w, r, "cart_add_failed")
+		return
+	}
+	h.redirectResult(w, r, "success")
+}
 
-	return refreshed.AccessToken, nil
+func validateCartBasket(basket store.Basket, lines []store.BasketLine) string {
+	if basket.StoreID != store.UniversityPlaceStoreID {
+		return "wrong_store"
+	}
+	if len(lines) == 0 {
+		return "empty_basket"
+	}
+	for _, line := range lines {
+		if !krogerProductIDPattern.MatchString(line.ExternalID) || line.Packs < 1 {
+			return "invalid_product"
+		}
+	}
+	return ""
+}
+
+func (h *CartHandler) signState(targetID, basketID int64) (string, string, error) {
+	nonceBytes := make([]byte, cartNonceBytes)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return "", "", err
+	}
+	nonce := base64.RawURLEncoding.EncodeToString(nonceBytes)
+	payload, err := json.Marshal(cartState{TargetID: targetID, BasketID: basketID, Expires: h.now().Add(cartStateTTL).Unix(), Nonce: nonce})
+	if err != nil {
+		return "", "", err
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	mac := hmac.New(sha256.New, h.stateKey)
+	_, _ = mac.Write([]byte(encoded))
+	return encoded + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nonce, nil
+}
+
+func (h *CartHandler) verifyState(raw string) (cartState, error) {
+	if len(raw) == 0 || len(raw) > maxCartStateLength {
+		return cartState{}, errors.New("invalid state length")
+	}
+	parts := strings.Split(raw, ".")
+	if len(parts) != 2 {
+		return cartState{}, errors.New("malformed state")
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || len(sig) != sha256.Size {
+		return cartState{}, errors.New("malformed signature")
+	}
+	mac := hmac.New(sha256.New, h.stateKey)
+	_, _ = mac.Write([]byte(parts[0]))
+	if !hmac.Equal(sig, mac.Sum(nil)) {
+		return cartState{}, errors.New("invalid signature")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return cartState{}, errors.New("malformed payload")
+	}
+	dec := json.NewDecoder(strings.NewReader(string(payload)))
+	dec.DisallowUnknownFields()
+	var state cartState
+	if err := dec.Decode(&state); err != nil || state.TargetID < 1 || state.BasketID < 1 {
+		return cartState{}, errors.New("invalid payload")
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return cartState{}, errors.New("invalid trailing payload")
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(state.Nonce)
+	if err != nil || len(nonce) != cartNonceBytes {
+		return cartState{}, errors.New("invalid nonce")
+	}
+	now := h.now().Unix()
+	if state.Expires <= now {
+		return cartState{}, errExpiredCartState
+	}
+	if state.Expires > h.now().Add(cartStateTTL+time.Second).Unix() {
+		return cartState{}, errors.New("invalid future expiry")
+	}
+	return state, nil
+}
+
+func constantTimeNonceEqual(a, b string) bool {
+	aBytes, aErr := base64.RawURLEncoding.DecodeString(a)
+	bBytes, bErr := base64.RawURLEncoding.DecodeString(b)
+	return aErr == nil && bErr == nil && len(aBytes) == cartNonceBytes && len(bBytes) == cartNonceBytes && hmac.Equal(aBytes, bBytes)
+}
+func scopeContains(raw, want string) bool {
+	for _, scope := range strings.Fields(raw) {
+		if scope == want {
+			return true
+		}
+	}
+	return false
+}
+func (h *CartHandler) setNonceCookie(w http.ResponseWriter, value string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{Name: cartNonceCookie, Value: value, Path: "/api/kroger/callback", MaxAge: maxAge, HttpOnly: true, Secure: h.secureCookie, SameSite: http.SameSiteLaxMode})
+}
+func (h *CartHandler) redirectResult(w http.ResponseWriter, r *http.Request, result string) {
+	u := *h.WebAppURL
+	q := u.Query()
+	if result == "success" {
+		q.Set("cart", "success")
+	} else {
+		q.Set("cart_error", result)
+	}
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusSeeOther)
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ProductFilter holds the optional list filters (?store_id=SEED&food_id=3).
+// ProductFilter holds the optional product-list filters.
 
 // FoodID is a pointer, for the same three-state reason as
 // a nullable column.

@@ -22,7 +22,7 @@ func TestCreateAndGetTarget_RoundTrip(t *testing.T) {
 		FatGDaily:         60,
 		CaloriesMaxDaily:  &calories,
 		BudgetCentsWeekly: 7500,
-		StoreID:           "SEED",
+		StoreID:           UniversityPlaceStoreID,
 		DietTags:          []string{"gluten_free"},
 		ExcludeFoodIDs:    []int64{1, 2, 3},
 	}
@@ -75,7 +75,7 @@ func TestCreateTarget_NilCaloriesStaysNil(t *testing.T) {
 
 	target := UserTarget{
 		Label: "__test_no_cap__", ProteinGDaily: 150, CarbsGDaily: 150,
-		FatGDaily: 50, BudgetCentsWeekly: 6000, StoreID: "SEED",
+		FatGDaily: 50, BudgetCentsWeekly: 6000, StoreID: UniversityPlaceStoreID,
 		DietTags: []string{}, ExcludeFoodIDs: []int64{},
 	}
 

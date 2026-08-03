@@ -18,6 +18,9 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("REDIS_URL", "")
 	t.Setenv("FDC_API_KEY", "")
+	t.Setenv("KROGER_CLIENT_ID", "")
+	t.Setenv("KROGER_CLIENT_SECRET", "")
+	t.Setenv("WEB_APP_URL", "")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -45,6 +48,9 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.FDCAPIKey != "" {
 		t.Errorf("default FDCAPIKey: want empty, got %q", cfg.FDCAPIKey)
 	}
+	if cfg.WebAppURL != "" {
+		t.Errorf("default WebAppURL: want empty, got %q", cfg.WebAppURL)
+	}
 }
 
 // TestLoadFromEnvOverrides checks that environment variables win over the
@@ -55,6 +61,7 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://prod-db/macrocart")
 	t.Setenv("REDIS_URL", "redis://prod-redis:6379/1")
 	t.Setenv("FDC_API_KEY", "test-key-123")
+	t.Setenv("WEB_APP_URL", "https://macro-max.example")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -72,6 +79,18 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.FDCAPIKey != "test-key-123" {
 		t.Errorf("FDCAPIKey override: want %q, got %q", "test-key-123", cfg.FDCAPIKey)
+	}
+	if cfg.WebAppURL != "https://macro-max.example" {
+		t.Errorf("WebAppURL override: got %q", cfg.WebAppURL)
+	}
+}
+
+func TestLoadFromEnvRequiresWebAppURLForKrogerCart(t *testing.T) {
+	t.Setenv("KROGER_CLIENT_ID", "client")
+	t.Setenv("KROGER_CLIENT_SECRET", "secret")
+	t.Setenv("WEB_APP_URL", "")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected missing WEB_APP_URL to fail when Kroger credentials are configured")
 	}
 }
 

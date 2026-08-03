@@ -3,6 +3,7 @@ module github.com/BenYang12/Macro-Max
 go 1.26
 
 require (
+	github.com/anthropics/anthropic-sdk-go v1.61.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/redis/go-redis/v9 v9.21.0
 	golang.org/x/sync v0.22.0
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.61.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

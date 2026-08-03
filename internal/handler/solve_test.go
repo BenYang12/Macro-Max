@@ -89,7 +89,7 @@ func (f *fakeSolver) Solve(ctx context.Context, in solver.SolveInput) (*solverv1
 func okStore() *fakeSolveStore {
 	return &fakeSolveStore{
 		target: store.UserTarget{
-			ID: 1, Label: "cutting", StoreID: "SEED",
+			ID: 1, Label: "cutting", StoreID: store.UniversityPlaceStoreID,
 			ProteinGDaily: 180, CarbsGDaily: 200, FatGDaily: 60,
 			BudgetCentsWeekly: 7500,
 			DietTags:          []string{}, ExcludeFoodIDs: []int64{},
@@ -177,8 +177,8 @@ func TestSolve_PassesDietFiltersToTheQuery(t *testing.T) {
 		t.Fatalf("status = %d; want 200", rr.Code)
 	}
 
-	if st.gotStoreID != "SEED" {
-		t.Errorf("store_id = %q; want SEED", st.gotStoreID)
+	if st.gotStoreID != store.UniversityPlaceStoreID {
+		t.Errorf("store_id = %q; want %s", st.gotStoreID, store.UniversityPlaceStoreID)
 	}
 	if len(st.gotDietTags) != 1 || st.gotDietTags[0] != "vegan" {
 		t.Errorf("diet tags = %v; want [vegan]", st.gotDietTags)
@@ -356,7 +356,7 @@ func TestSolve_CacheHitSkipsTheSolver(t *testing.T) {
 // ended up with no basket at all.
 //
 // Harmless while baskets were only an audit trail. Not harmless once
-// /v1/recipes and /v1/kroger/cart began reading "the latest basket for this
+// The recipe and Kroger cart flows read "the latest basket for this
 // target": both told a user who had just solved successfully to go solve first.
 func TestSolve_CacheHitStillPersistsTheBasket(t *testing.T) {
 	st := okStore()
@@ -373,7 +373,7 @@ func TestSolve_CacheHitStillPersistsTheBasket(t *testing.T) {
 	postSolve(t, h, `{"target_id": 1}`)
 
 	if st.savedBasket == nil {
-		t.Fatal("a cache hit did not persist a basket; /v1/recipes and /v1/kroger/cart depend on this row")
+		t.Fatal("a cache hit did not persist a basket; recipe and cart flows depend on this row")
 	}
 	if st.savedBasket.TotalCostCents != 999 {
 		t.Errorf("persisted total = %d, want the CACHED 999", st.savedBasket.TotalCostCents)

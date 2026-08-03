@@ -12,7 +12,7 @@ package solver
 //
 // It needs two things running, and self-skips without them, so `make test` on a
 // bare laptop stays green:
-//   TEST_DATABASE_URL  -> a migrated, SEEDED database
+//   TEST_DATABASE_URL  -> a migrated test database
 //   SOLVER_ADDR        -> a reachable solver (docker compose up solver)
 
 import (
@@ -54,6 +54,7 @@ func newE2E(t *testing.T) (*store.Store, *Client) {
 		t.Fatalf("connecting to test database: %v", err)
 	}
 	t.Cleanup(st.Close)
+	insertE2ECatalog(t, st)
 
 	cl, err := New(addr)
 	if err != nil {
@@ -64,17 +65,81 @@ func newE2E(t *testing.T) (*store.Store, *Client) {
 	return st, cl
 }
 
-// loadCatalog pulls the real seeded catalog out of Postgres.
+type fixtureFood struct {
+	name, category            string
+	tags                      []string
+	kcal, protein, carbs, fat float64
+	weight                    float64
+	price                     int64
+}
+
+// insertE2ECatalog provisions the smallest deterministic catalog that can
+// exercise nutrition filtering and the solver's variety constraints.
+func insertE2ECatalog(t *testing.T, st *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	fixtureTag := "__solver_e2e_" + t.Name()
+	allVegan := []string{"vegetarian", "vegan", "gluten_free", "dairy_free", fixtureTag}
+	foods := []fixtureFood{
+		{"chicken", "protein", []string{"gluten_free", "dairy_free", fixtureTag}, 120, 23, 0, 3, 1000, 900},
+		{"tofu", "protein", allVegan, 144, 17, 3, 9, 500, 250},
+		{"lentils", "protein", allVegan, 352, 25, 63, 1, 500, 200},
+		{"black beans", "protein", allVegan, 341, 22, 62, 1, 500, 200},
+		{"spinach", "vegetable", allVegan, 23, 3, 4, 0, 300, 200},
+		{"carrots", "vegetable", allVegan, 41, 1, 10, 0, 500, 180},
+		{"bananas", "fruit", allVegan, 89, 1, 23, 0, 1000, 250},
+		{"rice", "carb", allVegan, 365, 7, 80, 1, 1000, 300},
+		{"canola oil", "fat", allVegan, 884, 0, 0, 100, 500, 400},
+	}
+
+	tx, err := st.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("beginning fixture transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	foodIDs := make([]int64, 0, len(foods))
+	productIDs := make([]int64, 0, len(foods))
+	for i, f := range foods {
+		var foodID, productID int64
+		name := "__solver_e2e_" + t.Name() + "_" + f.name
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO foods (name, category, tags, kcal_per_100g,
+			 protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g)
+			VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+			name, f.category, f.tags, f.kcal, f.protein, f.carbs, f.fat).Scan(&foodID); err != nil {
+			t.Fatalf("inserting fixture food: %v", err)
+		}
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO products (food_id, store_id, external_id, name,
+			 pack_size_qty, pack_size_unit, net_weight_g, price_cents, available)
+			VALUES ($1, $2, $3, $4, 1, 'each', $5, $6, TRUE) RETURNING id`,
+			foodID, store.UniversityPlaceStoreID, name, name, f.weight, f.price).Scan(&productID); err != nil {
+			t.Fatalf("inserting fixture product %d: %v", i, err)
+		}
+		foodIDs = append(foodIDs, foodID)
+		productIDs = append(productIDs, productID)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("committing fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx := context.Background()
+		_, _ = st.Pool.Exec(cleanupCtx, `DELETE FROM products WHERE id = ANY($1)`, productIDs)
+		_, _ = st.Pool.Exec(cleanupCtx, `DELETE FROM foods WHERE id = ANY($1)`, foodIDs)
+	})
+}
+
+// loadCatalog pulls the isolated University Place fixture from Postgres.
 func loadCatalog(t *testing.T, st *store.Store) ([]store.Product, map[int64]store.Food) {
 	t.Helper()
 	ctx := context.Background()
 
-	products, err := st.ListSolveCandidates(ctx, "SEED", nil, nil)
+	products, err := st.ListSolveCandidates(ctx, store.UniversityPlaceStoreID, []string{"__solver_e2e_" + t.Name()}, nil)
 	if err != nil {
 		t.Fatalf("loading solve candidates: %v", err)
 	}
 	if len(products) == 0 {
-		t.Skip("no SEED products in the database; run `make seed`")
+		t.Fatal("fixture produced no solve candidates")
 	}
 
 	ids := make([]int64, 0, len(products))
@@ -102,80 +167,7 @@ func realisticTarget() store.UserTarget {
 		CarbsGDaily:       200,
 		FatGDaily:         60,
 		BudgetCentsWeekly: 7500,
-		StoreID:           "SEED",
-	}
-}
-
-// THE PHASE 3 HEADLINE TEST.
-//
-// This asserts that the answer is BAD, which feels backwards until I remember
-// what Phase 3 is for. A pure cost-minimizing LP with no variety constraints
-// finds the cheapest source of each macro and buys nothing else — the Stigler
-// diet result. I seeded cheap whey, cheap canola oil, and cheap rice precisely
-// so this would happen and be visible.
-//
-// When Phase 4's MILP lands, the equivalent test asserts the opposite: >= 3
-// protein sources, >= 2 vegetables, no food over 30% of calories. The DIFF
-// between these two tests is the entire argument for why Phase 4 exists, and
-// it's what I'd put in the README.
-func TestE2E_StiglerBasketIsDegenerate(t *testing.T) {
-	st, cl := newE2E(t)
-	products, foods := loadCatalog(t, st)
-
-	resp, err := cl.Solve(context.Background(), SolveInput{
-		Target:   realisticTarget(),
-		Products: products,
-		Foods:    foods,
-	})
-	if err != nil {
-		t.Fatalf("solve: %v", err)
-	}
-
-	if resp.Status != solverv1.SolveStatus_SOLVE_STATUS_OPTIMAL {
-		t.Fatalf("status = %v; want OPTIMAL. message: %s", resp.Status, resp.Message)
-	}
-
-	names := make([]string, 0, len(resp.Items))
-	for _, it := range resp.Items {
-		names = append(names, it.FoodName)
-	}
-	t.Logf("basket (%d items, %d cents): %v", len(resp.Items), resp.TotalCostCents, names)
-
-	// The degeneracy claim: a handful of foods out of 42 available.
-	if len(resp.Items) > 6 {
-		t.Errorf("expected a degenerate basket of a few foods; got %d: %v", len(resp.Items), names)
-	}
-
-	// Every macro target must still be met — the basket is inedible, not wrong.
-	// 180g/day x 7 = 1260g protein for the week.
-	if resp.Achieved.ProteinG < 1260-0.01 {
-		t.Errorf("protein = %.1f; want >= 1260", resp.Achieved.ProteinG)
-	}
-	if resp.Achieved.CarbsG < 1400-0.01 {
-		t.Errorf("carbs = %.1f; want >= 1400", resp.Achieved.CarbsG)
-	}
-	if resp.Achieved.FatG < 420-0.01 {
-		t.Errorf("fat = %.1f; want >= 420", resp.Achieved.FatG)
-	}
-
-	// And it must be within budget.
-	if resp.TotalCostCents > 7500 {
-		t.Errorf("cost %d exceeds the 7500 cent budget", resp.TotalCostCents)
-	}
-
-	// The specific failure Phase 4 fixes: no vegetables, no fruit. I assert this
-	// so that if it ever stops being true I have to think about why, rather than
-	// silently losing my justification for the next phase.
-	categories := map[string]bool{}
-	for _, it := range resp.Items {
-		for _, f := range foods {
-			if f.Name == it.FoodName {
-				categories[f.Category] = true
-			}
-		}
-	}
-	if categories["vegetable"] || categories["fruit"] {
-		t.Logf("NOTE: the LP chose produce (%v) — the Phase 4 justification is weaker than expected", categories)
+		StoreID:           store.UniversityPlaceStoreID,
 	}
 }
 
@@ -189,7 +181,7 @@ func TestE2E_ImpossibleBudgetReturnsMinFeasible(t *testing.T) {
 	target.BudgetCentsWeekly = 100 // one dollar a week
 
 	resp, err := cl.Solve(context.Background(), SolveInput{
-		Target: target, Products: products, Foods: foods,
+		Target: target, Products: products, Foods: foods, IntegerPacks: true,
 	})
 	if err != nil {
 		t.Fatalf("solve: %v", err)
@@ -215,12 +207,12 @@ func TestE2E_VeganFilterExcludesAnimalProducts(t *testing.T) {
 	st, cl := newE2E(t)
 	ctx := context.Background()
 
-	products, err := st.ListSolveCandidates(ctx, "SEED", []string{"vegan"}, nil)
+	products, err := st.ListSolveCandidates(ctx, store.UniversityPlaceStoreID, []string{"vegan", "__solver_e2e_" + t.Name()}, nil)
 	if err != nil {
 		t.Fatalf("loading vegan candidates: %v", err)
 	}
 	if len(products) == 0 {
-		t.Skip("no vegan SEED products; run `make seed`")
+		t.Fatal("fixture produced no vegan candidates")
 	}
 
 	ids := make([]int64, 0, len(products))
@@ -254,13 +246,15 @@ func TestE2E_VeganFilterExcludesAnimalProducts(t *testing.T) {
 	// Vegan protein at these targets is expensive, so give it room.
 	target.BudgetCentsWeekly = 15000
 
-	resp, err := cl.Solve(ctx, SolveInput{Target: target, Products: products, Foods: foods})
+	resp, err := cl.Solve(ctx, SolveInput{Target: target, Products: products, Foods: foods, IntegerPacks: true})
 	if err != nil {
 		t.Fatalf("solve: %v", err)
 	}
 
-	// Either answer is legitimate here: a vegan basket, or "not possible at
-	// this store". What must NOT happen is chicken showing up.
+	if resp.Status != solverv1.SolveStatus_SOLVE_STATUS_OPTIMAL {
+		t.Fatalf("status = %v; want OPTIMAL. message: %s", resp.Status, resp.Message)
+	}
+
 	for _, it := range resp.Items {
 		if it.FoodName == "Chicken Breast, raw" || it.FoodName == "Eggs, whole, raw" {
 			t.Errorf("vegan solve returned %q", it.FoodName)
@@ -269,51 +263,7 @@ func TestE2E_VeganFilterExcludesAnimalProducts(t *testing.T) {
 	t.Logf("vegan solve: %v, %d items", resp.Status, len(resp.Items))
 }
 
-// The two-pack-size plant from my seed data, checked end to end. The LP has no
-// integer constraint so it will buy fractional packs — I want to SEE that,
-// because it's the concrete dishonesty Phase 4 removes.
-func TestE2E_LPBuysFractionalPacks(t *testing.T) {
-	st, cl := newE2E(t)
-	products, foods := loadCatalog(t, st)
-
-	resp, err := cl.Solve(context.Background(), SolveInput{
-		Target: realisticTarget(), Products: products, Foods: foods,
-	})
-	if err != nil {
-		t.Fatalf("solve: %v", err)
-	}
-	if resp.Status != solverv1.SolveStatus_SOLVE_STATUS_OPTIMAL {
-		t.Skipf("solve was not optimal (%v), nothing to inspect", resp.Status)
-	}
-
-	fractional := false
-	for _, it := range resp.Items {
-		// A pack count with a meaningful fractional part means "buy 2.4 bags",
-		// which no store will sell me.
-		if diff := it.Packs - float64(int64(it.Packs)); diff > 0.01 && diff < 0.99 {
-			fractional = true
-			t.Logf("fractional packs: %.3f of %q (Phase 4 will make this an integer)",
-				it.Packs, it.ProductName)
-		}
-	}
-	if !fractional {
-		t.Log("no fractional packs this run — possible, but Phase 4's integer constraint is still needed in general")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// PHASE 4 — the same catalog, the same targets, the MILP switched on.
-//
-// The test below is the mirror image of TestE2E_StiglerBasketIsDegenerate. That
-// one asserts the basket is 3 joyless foods with no produce; this one asserts
-// >=3 protein sources, >=2 vegetables, >=1 fruit, whole packs, and no single
-// food dominating the calories. Running both against identical inputs is the
-// clearest evidence I have that Phase 4 did what it claimed.
-// ---------------------------------------------------------------------------
-
-// milpTarget is the same realistic cut as the LP test, with a budget that has
-// room for variety. Variety costs money — that's the trade Phase 4 makes, and
-// the budget has to acknowledge it.
+// milpTarget gives the whole-pack solver room for its variety requirements.
 func milpTarget() store.UserTarget {
 	t := realisticTarget()
 	t.BudgetCentsWeekly = 12000 // $120/week
@@ -334,9 +284,8 @@ func TestE2E_MILPProducesAnEdibleBasket(t *testing.T) {
 		t.Fatalf("solve: %v", err)
 	}
 
-	if resp.Status != solverv1.SolveStatus_SOLVE_STATUS_OPTIMAL &&
-		resp.Status != solverv1.SolveStatus_SOLVE_STATUS_FEASIBLE {
-		t.Fatalf("status = %v; want OPTIMAL or FEASIBLE. message: %s", resp.Status, resp.Message)
+	if resp.Status != solverv1.SolveStatus_SOLVE_STATUS_OPTIMAL {
+		t.Fatalf("status = %v; want OPTIMAL. message: %s", resp.Status, resp.Message)
 	}
 
 	// Group the answer by category so I can check the variety claims.
@@ -432,36 +381,4 @@ func TestE2E_MILPInfeasibleBudgetReportsMinimum(t *testing.T) {
 	t.Logf("MILP infeasible at 500c; needs %d cents (~$%.2f/week): %s",
 		resp.MinFeasibleBudgetCents,
 		float64(resp.MinFeasibleBudgetCents)/100, resp.Message)
-}
-
-// Side by side: the same target solved both ways. This is the comparison I'd
-// put in the README, and running it as a test means it can't rot.
-func TestE2E_MILPvsLPComparison(t *testing.T) {
-	st, cl := newE2E(t)
-	products, foods := loadCatalog(t, st)
-	ctx := context.Background()
-
-	lp, err := cl.Solve(ctx, SolveInput{Target: milpTarget(), Products: products, Foods: foods})
-	if err != nil {
-		t.Fatalf("lp solve: %v", err)
-	}
-	mi, err := cl.Solve(ctx, SolveInput{
-		Target: milpTarget(), Products: products, Foods: foods, IntegerPacks: true,
-	})
-	if err != nil {
-		t.Fatalf("milp solve: %v", err)
-	}
-
-	t.Logf("LP:   %d foods, %d cents, %.3fs", len(lp.Items), lp.TotalCostCents, lp.SolveSeconds)
-	t.Logf("MILP: %d foods, %d cents, %.3fs", len(mi.Items), mi.TotalCostCents, mi.SolveSeconds)
-
-	// Variety is not free, and I want that cost visible rather than hidden.
-	if mi.TotalCostCents < lp.TotalCostCents {
-		t.Logf("NOTE: the MILP came out cheaper (%d < %d), which is unexpected",
-			mi.TotalCostCents, lp.TotalCostCents)
-	}
-	if len(mi.Items) <= len(lp.Items) {
-		t.Errorf("MILP basket (%d items) should be more varied than the LP's (%d)",
-			len(mi.Items), len(lp.Items))
-	}
 }

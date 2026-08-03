@@ -1,13 +1,10 @@
 // Package main is the Kroger price ingester.
 //
-//	# find a store near a zip (read-only, writes nothing)
-//	go run ./cmd/krogeringest -zip 45202
-//
 //	# see what WOULD be written, without writing it
-//	go run ./cmd/krogeringest -location 01400376 -dry-run
+//	go run ./cmd/krogeringest -dry-run
 //
 //	# actually ingest
-//	go run ./cmd/krogeringest -location 01400376
+//	go run ./cmd/krogeringest
 //
 // THE SHAPE OF THIS PROGRAM: for each of my ~42 foods, search Kroger, filter
 // the results down to ones I trust, convert their sizes to grams, and upsert.
@@ -20,7 +17,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -42,8 +38,6 @@ const workers = 4
 const maxProductsPerFood = 4
 
 func main() {
-	zip := flag.String("zip", "", "find stores near this zip code and print them (writes nothing)")
-	locationID := flag.String("location", "", "Kroger locationId to ingest prices from")
 	dryRun := flag.Bool("dry-run", false, "fetch and parse but do not write to the database")
 	only := flag.String("only", "", "ingest just this one food name (for debugging a single mapping)")
 	probe := flag.String("probe", "", "search this raw term and print UNFILTERED results (for tuning search terms)")
@@ -73,27 +67,10 @@ func main() {
 	// My first pass had five foods return nothing because I wrote the terms a
 	// shopper would type, not the terms this store uses.
 	if *probe != "" {
-		if *locationID == "" {
-			log.Fatal("-probe needs -location too (prices and availability are per-store)")
-		}
-		if err := runProbe(ctx, client, *probe, *locationID); err != nil {
+		if err := runProbe(ctx, client, *probe, store.UniversityPlaceStoreID); err != nil {
 			log.Fatal(err)
 		}
 		return
-	}
-
-	// Store lookup is read-only, so it never opens a database connection.
-	if *zip != "" {
-		if err := runLocations(ctx, client, *zip); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-
-	if *locationID == "" {
-		fmt.Fprint(os.Stderr, "error: pass -zip to find a store, or -location to ingest\n\n")
-		flag.Usage()
-		os.Exit(2)
 	}
 
 	st, err := store.NewPool(ctx, cfg.DatabaseURL)
@@ -102,28 +79,9 @@ func main() {
 	}
 	defer st.Close()
 
-	if err := runIngest(ctx, client, st, *locationID, *dryRun, *only); err != nil {
+	if err := runIngest(ctx, client, st, store.UniversityPlaceStoreID, *dryRun, *only); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func runLocations(ctx context.Context, client *kroger.Client, zip string) error {
-	locations, err := client.Locations(ctx, zip, 10)
-	if err != nil {
-		return err
-	}
-	if len(locations) == 0 {
-		return fmt.Errorf("no Kroger-family stores found near %s", zip)
-	}
-
-	fmt.Printf("%d stores near %s:\n\n", len(locations), zip)
-	for _, l := range locations {
-		fmt.Printf("  locationId %-12s %s (%s)\n", l.LocationID, l.Name, l.Chain)
-		fmt.Printf("  %s%s, %s %s\n\n", strings.Repeat(" ", 25),
-			l.Address.AddressLine1, l.Address.City, l.Address.State)
-	}
-	fmt.Printf("Then ingest with:\n  go run ./cmd/krogeringest -location <locationId> -dry-run\n")
-	return nil
 }
 
 // foodResult is what one worker produces. Collecting structs rather than

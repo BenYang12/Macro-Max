@@ -166,7 +166,7 @@ func (h *SolveHandler) Solve(w http.ResponseWriter, r *http.Request) {
 					//
 					// That was invisible while baskets were only an audit trail.
 					// It stopped being invisible the moment /v1/recipes and
-					// /v1/kroger/cart started reading "the latest basket for
+					// the recipe and Kroger cart flows read "the latest basket for
 					// this target" — both would answer "solve first" to someone
 					// who had just solved successfully.
 					h.persist(ctx, target, cacheKey, cached)

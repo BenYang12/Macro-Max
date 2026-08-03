@@ -31,13 +31,13 @@ func (f *fakeProductStore) GetProduct(ctx context.Context, id int64) (store.Prod
 	return f.product, f.getErr
 }
 
-func TestProductsList_ParsesBothFilters(t *testing.T) {
+func TestProductsList_UsesFixedStoreAndParsesFoodFilter(t *testing.T) {
 	fake := &fakeProductStore{
 		products: []store.Product{{ID: 1, Name: "Test Chicken", FoodName: "Chicken Breast"}},
 	}
 	h := NewProductsHandler(fake)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/products?store_id=SEED&food_id=7", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/products?food_id=7", nil)
 	rr := httptest.NewRecorder()
 
 	h.List(rr, req)
@@ -45,8 +45,8 @@ func TestProductsList_ParsesBothFilters(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d; want %d", rr.Code, http.StatusOK)
 	}
-	if fake.gotFilter.StoreID != "SEED" {
-		t.Errorf("store_id = %q; want %q", fake.gotFilter.StoreID, "SEED")
+	if fake.gotFilter.StoreID != store.UniversityPlaceStoreID {
+		t.Errorf("store_id = %q; want %q", fake.gotFilter.StoreID, store.UniversityPlaceStoreID)
 	}
 	// FoodID is a POINTER, so check for nil BEFORE dereferencing — a nil
 	// dereference is a panic, which would crash the whole test binary rather
@@ -56,6 +56,19 @@ func TestProductsList_ParsesBothFilters(t *testing.T) {
 	}
 	if *fake.gotFilter.FoodID != 7 { // * reads THROUGH the pointer
 		t.Errorf("food_id = %d; want 7", *fake.gotFilter.FoodID)
+	}
+}
+
+func TestProductsList_RejectsStoreID(t *testing.T) {
+	fake := &fakeProductStore{}
+	h := NewProductsHandler(fake)
+	req := httptest.NewRequest(http.MethodGet, "/v1/products?store_id=other", nil)
+	rr := httptest.NewRecorder()
+
+	h.List(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want %d", rr.Code, http.StatusBadRequest)
 	}
 }
 
@@ -133,5 +146,19 @@ func TestProductsGet_UnknownIDReturns404(t *testing.T) {
 	}
 	if fake.gotID != 42 {
 		t.Errorf("store got id %d; want 42", fake.gotID)
+	}
+}
+
+func TestProductsGet_OtherStoreReturns404(t *testing.T) {
+	fake := &fakeProductStore{product: store.Product{ID: 42, StoreID: "other-store"}}
+	h := NewProductsHandler(fake)
+	req := httptest.NewRequest(http.MethodGet, "/v1/products/42", nil)
+	req.SetPathValue("id", "42")
+	rr := httptest.NewRecorder()
+
+	h.Get(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want %d", rr.Code, http.StatusNotFound)
 	}
 }

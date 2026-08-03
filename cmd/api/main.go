@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/BenYang12/Macro-Max/internal/config"
-	"github.com/BenYang12/Macro-Max/internal/crypt"
 	"github.com/BenYang12/Macro-Max/internal/kroger"
 	"github.com/BenYang12/Macro-Max/internal/recipes"
 	"github.com/BenYang12/Macro-Max/internal/server"
@@ -81,15 +79,13 @@ func main() {
 		cancelPing()
 	}
 
-	// The Kroger client, for the store-picker endpoint. Only built when
-	// credentials exist — without them /v1/stores is simply absent, which is a
-	// clearer signal than a route that 500s on every call.
+	// The Kroger client supports cart authorization when credentials exist.
 	var kr *kroger.Client
 	if cfg.KrogerClientID != "" && cfg.KrogerClientSecret != "" {
 		kr = kroger.New(cfg.KrogerClientID, cfg.KrogerClientSecret, nil)
-		log.Println("kroger client configured; /v1/stores enabled")
+		log.Println("kroger client configured")
 	} else {
-		log.Println("KROGER_CLIENT_ID/SECRET not set; /v1/stores will not be registered")
+		log.Println("KROGER_CLIENT_ID/SECRET not set; Kroger cart routes will not be registered")
 	}
 
 	// Claude, for POST /v1/recipes. Optional in exactly the same way the solver
@@ -104,35 +100,19 @@ func main() {
 		log.Println("ANTHROPIC_API_KEY not set; /v1/recipes will not be registered")
 	}
 
-	// The encryption key for stored Kroger cart tokens.
-	//
-	// Three outcomes, deliberately distinguished. Not set: the cart feature is
-	// off, which is a normal configuration. Set but INVALID: that's a mistake,
-	// and log.Fatal is correct — silently disabling a feature because the key
-	// was 16 bytes instead of 32 would be discovered days later. Valid: on.
-	var box *crypt.Box
-	switch b, err := crypt.NewBox(cfg.TokenEncryptionKey); {
-	case errors.Is(err, crypt.ErrNoKey):
-		log.Println("TOKEN_ENCRYPTION_KEY not set; Kroger cart routes will not be registered")
-	case err != nil:
-		log.Fatalf("TOKEN_ENCRYPTION_KEY is set but unusable: %v", err)
-	default:
-		box = b
-		if kr != nil {
-			log.Println("kroger cart routes enabled")
-		}
-	}
-
-	srv := server.New(server.Deps{
-		Addr:              cfg.Addr(),
-		Store:             st,
-		Solver:            sv,
-		Cache:             cache,
-		Kroger:            kr,
-		Recipes:           rc,
-		CryptoBox:         box,
-		KrogerRedirectURI: cfg.KrogerRedirectURI,
+	srv, err := server.New(server.Deps{
+		Addr:               cfg.Addr(),
+		Store:              st,
+		Solver:             sv,
+		Cache:              cache,
+		Kroger:             kr,
+		Recipes:            rc,
+		KrogerClientSecret: cfg.KrogerClientSecret,
+		WebAppURL:          cfg.WebAppURL,
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// ListenAndServe BLOCKS until the server stops, but main must also watch
 	// ctx for the shutdown signal — two things to wait on, so the server

@@ -171,6 +171,46 @@ func (s *Store) LatestBasketForTarget(ctx context.Context, targetID int64) (Bask
 	return b, lines, rows.Err()
 }
 
+// BasketByIDForTarget loads the exact solved basket bound into a cart OAuth
+// state. The target predicate prevents a valid basket ID from being paired
+// with a different target if state construction is ever changed incorrectly.
+func (s *Store) BasketByIDForTarget(ctx context.Context, basketID, targetID int64) (Basket, []BasketLine, error) {
+	var b Basket
+	err := s.Pool.QueryRow(ctx, `
+		SELECT id, target_id, store_id, solve_key, status, total_cost_cents, solver_stats
+		FROM baskets
+		WHERE id = $1 AND target_id = $2 AND status IN ('optimal', 'feasible')`, basketID, targetID).Scan(
+		&b.ID, &b.TargetID, &b.StoreID, &b.SolveKey, &b.Status, &b.TotalCostCents, &b.SolverStats)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return Basket{}, nil, ErrNotFound
+		}
+		return Basket{}, nil, fmt.Errorf("querying basket by id: %w", err)
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT bi.product_id, p.external_id, p.name, f.name,
+		       bi.packs, bi.grams, bi.cost_cents
+		FROM basket_items bi
+		JOIN products p ON p.id = bi.product_id
+		JOIN foods f ON f.id = p.food_id
+		WHERE bi.basket_id = $1
+		ORDER BY bi.cost_cents DESC`, b.ID)
+	if err != nil {
+		return Basket{}, nil, fmt.Errorf("querying basket lines by id: %w", err)
+	}
+	defer rows.Close()
+	lines := []BasketLine{}
+	for rows.Next() {
+		var line BasketLine
+		if err := rows.Scan(&line.ProductID, &line.ExternalID, &line.ProductName, &line.FoodName,
+			&line.Packs, &line.Grams, &line.CostCents); err != nil {
+			return Basket{}, nil, fmt.Errorf("scanning basket line by id: %w", err)
+		}
+		lines = append(lines, line)
+	}
+	return b, lines, rows.Err()
+}
+
 // GetBasketBySolveKey finds a previously-computed basket. Phase 4 serves
 // repeats from Redis, so this is mainly for history and debugging — "show me
 // what this exact request returned last time" without depending on the cache

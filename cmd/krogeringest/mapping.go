@@ -170,7 +170,7 @@ var searchTerms = []foodSearch{
 	// ---- fats ----
 	// Oils are sold by VOLUME, so the parser will reject them and they'll be
 	// skipped. That's the honest outcome: converting fl oz to grams needs a
-	// density I don't have. Their SEED products keep the solver working.
+	// density I don't have. They remain absent until a trustworthy mapping exists.
 	{FoodName: "Olive Oil", Term: "extra virgin olive oil"},
 	{FoodName: "Canola Oil", Term: "canola oil"},
 	{FoodName: "Peanut Butter", Term: "creamy peanut butter"},

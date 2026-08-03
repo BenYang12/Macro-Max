@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/BenYang12/Macro-Max/internal/crypt"
 	"github.com/BenYang12/Macro-Max/internal/handler"
 	"github.com/BenYang12/Macro-Max/internal/kroger"
 	"github.com/BenYang12/Macro-Max/internal/recipes"
@@ -12,45 +11,24 @@ import (
 	"github.com/BenYang12/Macro-Max/internal/store"
 )
 
-// Deps is everything the server can be built from.
-//
-// WHY A STRUCT NOW, when five positional parameters were fine before: Phase 7
-// would have made it eight, and `server.New(addr, st, sv, cache, kr, rc, box,
-// redirect)` is a call nobody can read. Worse, most of them are nilable
-// pointers, so transposing two arguments is a compile error only if I'm lucky.
-//
-// A struct fixes both: every value is NAMED at the call site, and adding a
-// dependency in Phase 8 won't touch a single existing line. This is the
-// standard Go answer to a constructor that has outgrown its parameter list, and
-// the moment to reach for it is exactly this one — when the list stops being
-// readable, not when it stops compiling.
+// Deps names the server's required and optional dependencies.
 type Deps struct {
 	Addr  string
 	Store *store.Store
 
-	// EVERY FIELD BELOW MAY BE NIL, and that's the design rather than sloppiness.
-	// The rule this project follows: Postgres is load-bearing, and everything
-	// else degrades. A missing dependency removes ITS routes and leaves the rest
-	// of the API working, because a solve endpoint that 500s on every call is a
-	// worse signal than a solve endpoint that isn't there.
+	// Nil optional clients remove only their associated routes.
 	Solver *solver.Client
 	Cache  *solver.Cache
 	Kroger *kroger.Client
 
-	// Phase 7.
 	Recipes *recipes.Client
 
-	// CryptoBox and KrogerRedirectURI are the cart feature's extra
-	// requirements. The cart routes need Kroger AND CryptoBox together — see
-	// the registration below, where that pairing is enforced in one place
-	// rather than checked defensively inside the handler.
-	CryptoBox         *crypt.Box
-	KrogerRedirectURI string
+	KrogerClientSecret string
+	WebAppURL          string
 }
 
-// New wires the routes and returns a configured server. It still doesn't call
-// ListenAndServe — that stays in main, the only thing allowed to block or exit.
-func New(d Deps) *http.Server {
+// New wires routes without starting the listener.
+func New(d Deps) (*http.Server, error) {
 	// multiplexer = router
 	// looks at incoming request's method + path -> decides WHICH handler function should run
 	mux := http.NewServeMux()
@@ -96,15 +74,6 @@ func New(d Deps) *http.Server {
 		mux.HandleFunc("POST /v1/solve", solve.Solve)
 	}
 
-	// Store lookup, proxied through my API so Kroger credentials never reach a
-	// browser.
-	if d.Kroger != nil {
-		stores := handler.NewStoresHandler(d.Kroger)
-		mux.HandleFunc("GET /v1/stores", stores.List)
-	}
-
-	// -------------------------------------------------------------- Phase 7
-
 	// Recipes. Registered only with an Anthropic key, which enforces the
 	// architectural claim in internal/recipes' doc comment at the ROUTING
 	// layer: the LLM is a finishing touch, and the solver — the actual
@@ -114,17 +83,14 @@ func New(d Deps) *http.Server {
 		mux.HandleFunc("POST /v1/recipes", rec.Generate)
 	}
 
-	// Cart. Needs Kroger credentials AND an encryption key, because these
-	// routes store a real person's refresh token and I will not write one to
-	// Postgres in plaintext. Checking both HERE rather than inside the handler
-	// means the handler can assume its Box is non-nil — a missing key removes
-	// the feature instead of producing a runtime error on the one request that
-	// matters.
-	if d.Kroger != nil && d.CryptoBox != nil {
-		cart := handler.NewCartHandler(d.Store, d.Kroger, d.CryptoBox, d.KrogerRedirectURI)
-		mux.HandleFunc("GET /v1/kroger/authorize", cart.Authorize)
+	// Cart tokens are used only during the OAuth callback and are never stored.
+	if d.Kroger != nil {
+		cart, err := handler.NewCartHandler(d.Store, d.Kroger, d.KrogerClientSecret, d.WebAppURL)
+		if err != nil {
+			return nil, err
+		}
+		mux.HandleFunc("POST /v1/kroger/authorize", cart.Authorize)
 		mux.HandleFunc("GET /v1/kroger/callback", cart.Callback)
-		mux.HandleFunc("POST /v1/kroger/cart", cart.AddBasket)
 	}
 
 	return &http.Server{
@@ -138,5 +104,5 @@ func New(d Deps) *http.Server {
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 150 * time.Second,
 		IdleTimeout:  120 * time.Second,
-	}
+	}, nil
 }

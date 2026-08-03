@@ -36,7 +36,7 @@ func fixture() SolveInput {
 			CarbsGDaily:       200,
 			FatGDaily:         60,
 			BudgetCentsWeekly: 7500,
-			StoreID:           "SEED",
+			StoreID:           store.UniversityPlaceStoreID,
 		},
 		Foods: map[int64]store.Food{
 			1: {

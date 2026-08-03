@@ -35,7 +35,6 @@ type createTargetRequest struct {
 	FatGDaily         *int    `json:"fat_g_daily"`
 	CaloriesMaxDaily  *int    `json:"calories_max_daily"` // genuinely optional
 	BudgetCentsWeekly *int    `json:"budget_cents_weekly"`
-	StoreID           *string `json:"store_id"`
 
 	DietTags       []string `json:"diet_tags"`        // slices are already nil-able
 	ExcludeFoodIDs []int64  `json:"exclude_food_ids"` // so no pointer needed
@@ -71,12 +70,6 @@ func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// Present but empty is a DIFFERENT mistake than absent, and saying so
 		// helps whoever is debugging the client.
 		fields["label"] = "must not be empty"
-	}
-
-	if req.StoreID == nil {
-		fields["store_id"] = "must be provided"
-	} else if *req.StoreID == "" {
-		fields["store_id"] = "must not be empty"
 	}
 
 	// The three macros share identical rules, so a tiny local closure keeps
@@ -134,7 +127,7 @@ func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		FatGDaily:         *req.FatGDaily,
 		CaloriesMaxDaily:  req.CaloriesMaxDaily, // already a pointer; nil is meaningful
 		BudgetCentsWeekly: *req.BudgetCentsWeekly,
-		StoreID:           *req.StoreID,
+		StoreID:           store.UniversityPlaceStoreID,
 		DietTags:          req.DietTags,
 		ExcludeFoodIDs:    req.ExcludeFoodIDs,
 	}

@@ -10,12 +10,10 @@ package kroger
 //	--------------------------  ------------------------------------------
 //	my app IS the identity      a HUMAN is the identity; my app acts for them
 //	no browser involved         the user must visit Kroger and click Approve
-//	token = 30 min, re-fetch    access ~30 min + a refresh token lasting months
+//	token = 30 min, re-fetch    one short-lived access token
 //	reads public data           writes to their account
 //
-// That last row is why everything here is more careful than token.go: a leaked
-// client-credentials token exposes grocery prices, which are on a shelf in
-// public. A leaked refresh token lets someone else fill a stranger's cart.
+// The user token is held only for the callback request and is never persisted.
 //
 // THE SHAPE OF THE FLOW, since the terminology hides how simple it is:
 //
@@ -23,10 +21,8 @@ package kroger
 //     I want, my redirect URI, and a random `state`.
 //  2. They log in and approve.
 //  3. Kroger redirects the browser to my redirect URI with ?code=...&state=...
-//  4. I check the state matches, then POST the code to the token endpoint and
-//     get back an access token + a refresh token.
-//  5. From then on I use the access token, and swap the refresh token for a new
-//     access token whenever it expires.
+//  4. The callback checks the signed state, exchanges the code, fills the cart,
+//     and discards the returned token.
 //
 // The `code` is single-use and short-lived precisely because it travels through
 // a browser URL — visible in history, in Referer headers, and in server logs.
@@ -34,7 +30,6 @@ package kroger
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -42,7 +37,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // defaultAuthorizeURL is where the USER goes (in a browser), as opposed to
@@ -60,44 +54,8 @@ const ScopeCartWrite = "cart.basic:write"
 
 // UserToken is one user's granted credentials.
 type UserToken struct {
-	AccessToken  string
-	RefreshToken string
-	ExpiresAt    time.Time
-	Scope        string
-}
-
-// Valid reports whether the access token can still be used, with the same
-// 30-second margin token.go uses — and for the same reason: a token that passes
-// the check at 29:59 can still be dead by the time the request lands.
-func (t UserToken) Valid() bool {
-	return t.AccessToken != "" && time.Now().Before(t.ExpiresAt.Add(-refreshMargin))
-}
-
-// NewState generates the CSRF token for the authorize redirect.
-//
-// WHAT `state` ACTUALLY DEFENDS AGAINST, because "CSRF token" makes it sound
-// like boilerplate: without it, an attacker can complete step 1 themselves,
-// obtain a `code` for THEIR Kroger account, and then trick you into visiting
-//
-//	https://myapp.example/v1/kroger/callback?code=<attacker's code>
-//
-// My server would dutifully exchange it and store the attacker's token against
-// your session. You'd then add groceries to their cart — and if they'd granted
-// a broader scope, hand them whatever else flows through that connection.
-//
-// The defense: generate a random value, remember it, and refuse any callback
-// whose state doesn't match. The attacker can't know the value, so they can't
-// forge a callback that survives the check.
-//
-// crypto/rand, not math/rand — a predictable "random" value defeats the entire
-// mechanism. URL-safe base64 because this goes in a query string, where the
-// standard alphabet's + and / would need escaping.
-func NewState() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generating state: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	AccessToken string
+	Scope       string
 }
 
 // AuthorizeURL builds the URL to send the user's BROWSER to.
@@ -135,35 +93,11 @@ func (c *Client) ExchangeCode(ctx context.Context, code, redirectURI string) (Us
 	return c.postTokenForm(ctx, form)
 }
 
-// RefreshUserToken swaps a refresh token for a fresh access token.
-//
-// A subtlety worth knowing: some providers ROTATE the refresh token, returning
-// a new one that invalidates the old. Kroger's response may or may not include
-// one, so postTokenForm carries the old value forward when the field is absent
-// — dropping it would silently log the user out weeks later, which is a
-// miserable bug to trace back to this line.
-func (c *Client) RefreshUserToken(ctx context.Context, refreshToken string) (UserToken, error) {
-	form := url.Values{}
-	form.Set("grant_type", "refresh_token")
-	form.Set("refresh_token", refreshToken)
-
-	tok, err := c.postTokenForm(ctx, form)
-	if err != nil {
-		return UserToken{}, err
-	}
-	if tok.RefreshToken == "" {
-		tok.RefreshToken = refreshToken
-	}
-	return tok, nil
-}
-
 // userTokenResponse mirrors the token endpoint's reply for these two grants.
 // Same endpoint as client credentials, two extra fields.
 type userTokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	Scope        string `json:"scope"`
+	AccessToken string `json:"access_token"`
+	Scope       string `json:"scope"`
 }
 
 // postTokenForm is the shared exchange. Both grants POST a form to the same
@@ -208,12 +142,7 @@ func (c *Client) postTokenForm(ctx context.Context, form url.Values) (UserToken,
 		return UserToken{}, fmt.Errorf("token endpoint returned an empty access_token")
 	}
 
-	return UserToken{
-		AccessToken:  tr.AccessToken,
-		RefreshToken: tr.RefreshToken,
-		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
-		Scope:        tr.Scope,
-	}, nil
+	return UserToken(tr), nil
 }
 
 // ------------------------------------------------------------------- the cart

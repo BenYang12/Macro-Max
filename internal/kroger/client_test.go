@@ -121,7 +121,7 @@ func TestToken_IsReusedWhileValid(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		if _, err := c.Locations(ctx, "45202", 1); err != nil {
+		if _, err := c.SearchProducts(ctx, "oats", "09700117", 1); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
 	}
@@ -142,7 +142,7 @@ func TestToken_RefreshesInsideTheSafetyMargin(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
-		if _, err := c.Locations(ctx, "45202", 1); err != nil {
+		if _, err := c.SearchProducts(ctx, "oats", "09700117", 1); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
 	}
@@ -165,7 +165,7 @@ func TestToken_ConcurrentCallersCauseOneRefresh(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.Locations(ctx, "45202", 1)
+			_, _ = c.SearchProducts(ctx, "oats", "09700117", 1)
 		}()
 	}
 	wg.Wait()
@@ -259,7 +259,7 @@ func TestGet_TypedErrorsForEachStatus(t *testing.T) {
 		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
 			c := newTestClient(t, &fakeKroger{apiStatus: tc.status})
 
-			_, err := c.Locations(context.Background(), "45202", 1)
+			_, err := c.SearchProducts(context.Background(), "oats", "09700117", 1)
 			if err == nil {
 				t.Fatalf("expected an error for %d", tc.status)
 			}
@@ -304,7 +304,7 @@ func TestRateLimiter_PacesRequests(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < 3; i++ {
-		c.Locations(context.Background(), "45202", 1)
+		_, _ = c.SearchProducts(context.Background(), "oats", "09700117", 1)
 	}
 	elapsed := time.Since(start)
 

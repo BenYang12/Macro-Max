@@ -18,7 +18,7 @@ CREATE TABLE user_targets (
     -- Money = integer cents, weekly period since I'm helping users budget food for a week
     budget_cents_weekly INT NOT NULL CHECK (budget_cents_weekly > 0),
 
-    -- Which store's prices to solve against ('SEED' until Phase 5).
+    -- Store catalog used for this solve.
     store_id TEXT NOT NULL,
 
     -- Filters applied when selecting candidate foods for the solve:

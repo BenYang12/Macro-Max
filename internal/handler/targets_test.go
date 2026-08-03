@@ -58,8 +58,7 @@ func TestTargetsCreate_ValidReturns201AndLocation(t *testing.T) {
 		"protein_g_daily": 180,
 		"carbs_g_daily": 200,
 		"fat_g_daily": 60,
-		"budget_cents_weekly": 7500,
-		"store_id": "SEED"
+		"budget_cents_weekly": 7500
 	}`)
 
 	if rr.Code != http.StatusCreated {
@@ -73,6 +72,9 @@ func TestTargetsCreate_ValidReturns201AndLocation(t *testing.T) {
 	}
 	if fake.created.Label != "cutting" {
 		t.Errorf("label = %q; want %q", fake.created.Label, "cutting")
+	}
+	if fake.created.StoreID != store.UniversityPlaceStoreID {
+		t.Errorf("store_id = %q; want %q", fake.created.StoreID, store.UniversityPlaceStoreID)
 	}
 	// Omitted arrays must reach the store as EMPTY, never nil — the NOT NULL
 	// DEFAULT '{}' columns depend on it, and a nil slice would be sent as SQL
@@ -115,12 +117,12 @@ func TestTargetsCreate_MissingFieldsReturn422WithAllFields(t *testing.T) {
 		t.Errorf("error code = %q; want %q", body.Error.Code, "validation_failed")
 	}
 
-	// Five required fields were omitted; all five must be reported AT ONCE.
+	// Four required fields were omitted; all four must be reported at once.
 	// This is the assertion that would fail if validation returned early on
 	// the first problem.
 	for _, want := range []string{
 		"protein_g_daily", "carbs_g_daily", "fat_g_daily",
-		"budget_cents_weekly", "store_id",
+		"budget_cents_weekly",
 	} {
 		if _, ok := body.Error.Fields[want]; !ok {
 			t.Errorf("missing %q in validation fields: %v", want, body.Error.Fields)
@@ -137,7 +139,7 @@ func TestTargetsCreate_NegativeMacroReturns422(t *testing.T) {
 
 	rr := postTarget(t, h, `{
 		"label": "bad", "protein_g_daily": -5, "carbs_g_daily": 200,
-		"fat_g_daily": 60, "budget_cents_weekly": 7500, "store_id": "SEED"
+		"fat_g_daily": 60, "budget_cents_weekly": 7500
 	}`)
 
 	if rr.Code != http.StatusUnprocessableEntity {
@@ -152,7 +154,7 @@ func TestTargetsCreate_ZeroBudgetReturns422(t *testing.T) {
 	// the pointer is non-nil. Only the explicit <= 0 check catches it.
 	rr := postTarget(t, h, `{
 		"label": "broke", "protein_g_daily": 180, "carbs_g_daily": 200,
-		"fat_g_daily": 60, "budget_cents_weekly": 0, "store_id": "SEED"
+		"fat_g_daily": 60, "budget_cents_weekly": 0
 	}`)
 
 	if rr.Code != http.StatusUnprocessableEntity {
@@ -168,7 +170,7 @@ func TestTargetsCreate_CalorieCapBelowMacrosReturns422(t *testing.T) {
 	rr := postTarget(t, h, `{
 		"label": "impossible", "protein_g_daily": 180, "carbs_g_daily": 200,
 		"fat_g_daily": 60, "calories_max_daily": 1000,
-		"budget_cents_weekly": 7500, "store_id": "SEED"
+		"budget_cents_weekly": 7500
 	}`)
 
 	if rr.Code != http.StatusUnprocessableEntity {
@@ -185,7 +187,7 @@ func TestTargetsCreate_CalorieCapAboveMacrosIsAccepted(t *testing.T) {
 	rr := postTarget(t, h, `{
 		"label": "sensible", "protein_g_daily": 180, "carbs_g_daily": 200,
 		"fat_g_daily": 60, "calories_max_daily": 2400,
-		"budget_cents_weekly": 7500, "store_id": "SEED"
+		"budget_cents_weekly": 7500
 	}`)
 
 	if rr.Code != http.StatusCreated {
@@ -215,8 +217,21 @@ func TestTargetsCreate_UnknownFieldReturns400(t *testing.T) {
 
 	rr := postTarget(t, h, `{
 		"label": "cutting", "protein_g_daily": 180, "carbs_g_daily": 200,
-		"fat_g_daily": 60, "budget_cents_weekly": 7500, "store_id": "SEED",
+		"fat_g_daily": 60, "budget_cents_weekly": 7500,
 		"sneaky": true
+	}`)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", rr.Code)
+	}
+}
+
+func TestTargetsCreate_RejectsClientStoreID(t *testing.T) {
+	h := NewTargetsHandler(&fakeTargetStore{})
+	rr := postTarget(t, h, `{
+		"label": "cutting", "protein_g_daily": 180, "carbs_g_daily": 200,
+		"fat_g_daily": 60, "budget_cents_weekly": 7500,
+		"store_id": "another-store"
 	}`)
 
 	if rr.Code != http.StatusBadRequest {

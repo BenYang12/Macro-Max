@@ -67,25 +67,6 @@ func New(clientID, clientSecret string, store TokenStore) *Client {
 // Kroger nests deeply, and I only declare what I use. Same reasoning as the FDC
 // client: I don't control this schema, so tolerating unknown fields is right.
 
-// Location is one store.
-type Location struct {
-	LocationID string  `json:"locationId"`
-	Name       string  `json:"name"`
-	Chain      string  `json:"chain"`
-	Address    Address `json:"address"`
-}
-
-type Address struct {
-	AddressLine1 string `json:"addressLine1"`
-	City         string `json:"city"`
-	State        string `json:"state"`
-	ZipCode      string `json:"zipCode"`
-}
-
-type locationsResponse struct {
-	Data []Location `json:"data"`
-}
-
 // Product is one search result. Note the ITEMS array: Kroger models a product
 // as a description plus one or more purchasable items, and the SIZE and PRICE
 // live on the item, not the product. That surprised me and it's why the
@@ -122,23 +103,6 @@ type productsResponse struct {
 }
 
 // ---------------------------------------------------------------- operations
-
-// Locations finds stores near a zip code.
-func (c *Client) Locations(ctx context.Context, zip string, limit int) ([]Location, error) {
-	if limit <= 0 {
-		limit = 10
-	}
-	params := url.Values{}
-	// Kroger's filter parameters use dotted names. Not my choice.
-	params.Set("filter.zipCode.near", zip)
-	params.Set("filter.limit", strconv.Itoa(limit))
-
-	var out locationsResponse
-	if err := c.get(ctx, "/locations", params, &out); err != nil {
-		return nil, err
-	}
-	return out.Data, nil
-}
 
 // SearchProducts finds products matching a term at one store.
 //

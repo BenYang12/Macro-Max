@@ -29,13 +29,17 @@ func NewProductsHandler(s ProductStore) *ProductsHandler {
 	return &ProductsHandler{Store: s}
 }
 
-// List handles GET /v1/products?store_id=&food_id=
+// List handles GET /v1/products?food_id=. The catalog is fixed server-side.
 func (h *ProductsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query() // reaches inside the request and pulls out just the query-string parameters (the ?key=value part)
+	if q.Has("store_id") {
+		badRequestResponse(w, errors.New("store_id is not configurable"))
+		return
+	}
 
 	filter := store.ProductFilter{
-		StoreID: q.Get("store_id"),
+		StoreID: store.UniversityPlaceStoreID,
 	}
 
 	// PARSING AN OPTIONAL INTEGER
@@ -87,6 +91,10 @@ func (h *ProductsHandler) Get(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		serverErrorResponse(w, err)
+		return
+	}
+	if product.StoreID != store.UniversityPlaceStoreID {
+		notFoundResponse(w)
 		return
 	}
 	if err := writeJSON(w, http.StatusOK, envelope{"product": product}); err != nil {
