@@ -35,3 +35,6 @@ __pycache__/
 node_modules/
 .next/
 next-env.d.ts
+web/tsconfig.tsbuildinfo
+web/playwright-report/
+web/test-results/

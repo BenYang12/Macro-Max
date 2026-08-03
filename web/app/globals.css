@@ -1,27 +1,150 @@
 @import "tailwindcss";
 
-/*
-  Tailwind v4 is CSS-first: there is no tailwind.config.ts, and theme values
-  live here as CSS custom properties. One fewer config file to keep in sync.
-*/
+:root {
+  --paper: #f4f0e4;
+  --paper-raised: #fffdf7;
+  --ink: #173128;
+  --ink-soft: #4f6259;
+  --green: #174b38;
+  --green-dark: #0d3427;
+  --green-wash: #dfe9dc;
+  --red: #b63a2f;
+  --red-dark: #8d2922;
+  --rule: #b8c0af;
+  --warning: #76580c;
+  --font-sans: "Geist Variable";
+  --font-serif: "Source Serif 4 Variable";
+}
 
-/*
-  prefers-reduced-motion guard. Someone who gets motion sickness or vestibular
-  symptoms from animation has told their OS so; honoring it is not optional.
-  Belt-and-braces at the global level so I can't forget it on an individual
-  component later.
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #101a16;
+    --paper-raised: #17231e;
+    --ink: #edf1e7;
+    --ink-soft: #bbc8be;
+    --green: #9fc7a8;
+    --green-dark: #d8eadb;
+    --green-wash: #243a30;
+    --red: #ef8176;
+    --red-dark: #ffaaa2;
+    --rule: #41564b;
+    --warning: #f0cf70;
+  }
+}
 
-  WHY NOT 0.01ms: the copy-paste version of this rule everyone uses sets
-  durations to 0.01ms !important, which doesn't reduce motion so much as DELETE
-  every transition. That throws away useful feedback along with the nausea —
-  a button's hover state, a bar filling to show a value changed. "Reduced
-  motion" means less movement, not no state change.
+html {
+  background: var(--paper);
+  scroll-behavior: smooth;
+}
 
-  So instead: keep transitions, make them short and non-spatial (1ms is
-  effectively instant to the eye but still fires transitionend handlers), and
-  kill only the two things that actually cause vestibular symptoms — repeating
-  animations and smooth scrolling, which moves the whole viewport under you.
-*/
+body {
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, transparent 0, transparent calc(50% - 1px), color-mix(in srgb, var(--rule) 22%, transparent) 50%, transparent calc(50% + 1px)),
+    var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans), sans-serif;
+}
+
+h1,
+h2,
+h3,
+legend {
+  font-family: var(--font-serif), Georgia, serif;
+}
+
+::selection {
+  background: var(--red);
+  color: white;
+}
+
+.skip-link {
+  position: fixed;
+  left: 1rem;
+  top: 1rem;
+  z-index: 50;
+  translate: 0 -200%;
+  background: var(--green-dark);
+  color: var(--paper-raised);
+  padding: .65rem 1rem;
+}
+
+.skip-link:focus { translate: 0; }
+
+.page-shell {
+  width: min(100% - 2rem, 76rem);
+  margin-inline: auto;
+  padding-block: clamp(1.5rem, 4vw, 4.5rem) 6rem;
+}
+
+.masthead {
+  border-top: 6px solid var(--green);
+  border-bottom: 1px solid var(--rule);
+  padding: 1.25rem 0 1.75rem;
+}
+
+.wordmark {
+  font: 700 clamp(3.2rem, 9vw, 6rem)/.84 var(--font-serif), Georgia, serif;
+  letter-spacing: -.04em;
+}
+
+.promise {
+  max-width: 54rem;
+  margin-top: 1rem;
+  color: var(--ink-soft);
+  font-size: clamp(1rem, 2vw, 1.18rem);
+  line-height: 1.6;
+}
+
+.store-banner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1.5rem;
+  align-items: center;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.store-banner strong { font-family: var(--font-serif), Georgia, serif; font-size: 1.22rem; }
+.store-banner p { color: var(--ink-soft); font-size: .88rem; }
+.price-stamp { color: var(--red-dark); font-size: .75rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(17rem, 23rem) minmax(0, 1fr);
+  gap: clamp(2rem, 6vw, 6rem);
+  padding-top: clamp(2rem, 5vw, 4rem);
+  align-items: start;
+}
+
+.target-panel { position: sticky; top: 1.5rem; }
+.section-title { font-size: clamp(1.7rem, 3vw, 2.5rem); line-height: 1; letter-spacing: -.025em; }
+.section-copy { color: var(--ink-soft); line-height: 1.55; }
+.form-rule { border-top: 1px solid var(--rule); padding-top: 1.4rem; }
+
+.primary-action,
+.secondary-action {
+  min-height: 2.75rem;
+  padding: .7rem 1rem;
+  font-weight: 720;
+  transition: background-color 160ms ease-out, color 160ms ease-out, border-color 160ms ease-out, translate 160ms ease-out;
+}
+.primary-action { background: var(--red); color: white; border: 1px solid var(--red); }
+.primary-action:hover { background: var(--red-dark); border-color: var(--red-dark); translate: 0 -1px; }
+.secondary-action { border: 1px solid var(--green); color: var(--green-dark); }
+.secondary-action:hover { background: var(--green-wash); }
+.primary-action:disabled, .secondary-action:disabled { cursor: not-allowed; opacity: .55; translate: none; }
+
+.results-panel { min-width: 0; }
+.results-empty { min-height: 24rem; display: grid; place-items: center; border-block: 1px solid var(--rule); color: var(--ink-soft); text-align: center; }
+.result-summary { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: end; padding-bottom: 1.4rem; border-bottom: 1px solid var(--rule); }
+.result-price { font: 700 clamp(2.3rem, 7vw, 4.7rem)/.9 var(--font-serif), Georgia, serif; letter-spacing: -.04em; color: var(--green-dark); }
+.result-meta { text-align: right; color: var(--ink-soft); font-size: .86rem; }
+.result-section { padding-top: 2rem; border-top: 1px solid var(--rule); }
+.action-dock { background: var(--green-wash); padding: 1.25rem; }
+
+input[type="text"], input:not([type]) { font-family: var(--font-sans), sans-serif; }
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -36,13 +159,17 @@
   }
 }
 
-/*
-  A visible focus ring on EVERY focusable element. :focus-visible rather than
-  :focus so it appears for keyboard navigation but not on mouse clicks — which
-  is the behavior that historically made people delete focus styles entirely
-  and break keyboard access for everyone.
-*/
 :focus-visible {
-  outline: 2px solid #0284c7;
-  outline-offset: 2px;
+  outline: 3px solid var(--red);
+  outline-offset: 3px;
+}
+
+@media (max-width: 760px) {
+  body { background: var(--paper); }
+  .page-shell { width: min(100% - 1.25rem, 76rem); padding-top: .75rem; }
+  .store-banner { grid-template-columns: 1fr; gap: .25rem; }
+  .workspace { grid-template-columns: 1fr; gap: 2.75rem; padding-top: 2rem; }
+  .target-panel { position: static; }
+  .result-summary { grid-template-columns: 1fr; }
+  .result-meta { text-align: left; }
 }

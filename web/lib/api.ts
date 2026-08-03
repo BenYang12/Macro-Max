@@ -1,17 +1,4 @@
-// api.ts — the whole boundary between my frontend and my Go server.
-//
-// Every type here is HAND-WRITTEN to mirror the JSON envelopes my Go handlers
-// produce. I could have generated them, but the API surface is seven endpoints
-// and has been stable since Phase 1, so a generator would be more machinery
-// than the problem deserves. The tradeoff I'm accepting: if I change a Go json
-// tag, TypeScript will not tell me — only a runtime failure will. Keeping every
-// type in ONE file is what makes that survivable.
-
-// ---------------------------------------------------------------- the models
-//
-// Field names are snake_case because they come off the wire that way. I'm
-// deliberately NOT camelCasing them at the boundary: a translation layer is one
-// more place for the two sides to disagree, and the names read fine as-is.
+// Handwritten types mirror this small JSON API without a generation step.
 
 export interface BasketItem {
   product_id: number;
@@ -51,21 +38,7 @@ export interface UserTarget {
   created_at: string;
 }
 
-// ---------------------------------------------------------------- the errors
-//
-// My Go server returns TWO DIFFERENT SHAPES under HTTP 422, and telling them
-// apart is the single most important thing this file does.
-//
-//   validation_failed -> has `fields`, a map of input name -> message
-//   infeasible        -> has `min_feasible_budget_cents`, and NO `fields`
-//
-// The second one is not really an error at all: it's the solver's most
-// valuable answer ("your macros need at least $X"), which just happens to
-// arrive on an error status because there's no basket to return.
-//
-// A DISCRIMINATED UNION is exactly the tool for this. Once I narrow on
-// `code`, TypeScript knows which extra fields exist, so I can't read
-// `.fields` on an infeasible response by accident.
+// Validation and infeasibility have distinct payloads under HTTP 422.
 
 export interface ValidationError {
   code: "validation_failed";
@@ -97,8 +70,6 @@ export class ApiError extends Error {
   }
 }
 
-// Type guards. Writing these as functions rather than inline `===` checks means
-// the narrowing logic exists once and every call site gets it for free.
 export function isValidationError(b: ApiErrorBody): b is ValidationError {
   return b.code === "validation_failed";
 }
@@ -108,11 +79,6 @@ export function isInfeasible(b: ApiErrorBody): b is InfeasibleError {
 }
 
 // ---------------------------------------------------------------- the calls
-
-// The store I ingest prices from: Harris Teeter University Place, 2110 S Estes
-// Dr. Hardcoded because it's the only store with live data, so a picker would
-// mostly offer choices that produce an empty catalog.
-export const STORE_ID = "09700117";
 
 /** What the form collects. Note the units in the names — they are load-bearing. */
 export interface TargetInput {
@@ -125,8 +91,6 @@ export interface TargetInput {
   diet_tags: string[];
 }
 
-// post is the shared plumbing. Everything below funnels through it so error
-// handling exists in exactly one place.
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method: "POST",
@@ -135,10 +99,6 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   });
 
   if (!res.ok) {
-    // My server always returns { error: {...} } on failure. If parsing that
-    // fails, something is wrong at a lower level than my API (a proxy 502, the
-    // Go server not running), so I synthesize a body rather than throwing a
-    // confusing JSON parse error at the user.
     let parsed: ApiErrorBody;
     try {
       const json = (await res.json()) as { error?: ApiErrorBody };
@@ -156,15 +116,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-/**
- * createTarget saves what the user asked for and returns the row, including
- * the database-assigned id that solve() needs.
- *
- * NOTE THE EXPLICIT OBJECT LITERAL. My Go handler sets DisallowUnknownFields,
- * so ANY extra key is a 400 — spreading form state in here would break the
- * moment the form grows a field the API doesn't know about. Listing the fields
- * by hand is the safeguard.
- */
+/** Save targets and return their database identifier. */
 export async function createTarget(input: TargetInput): Promise<UserTarget> {
   const { target } = await post<{ target: UserTarget }>("/targets", {
     label: input.label,
@@ -173,20 +125,12 @@ export async function createTarget(input: TargetInput): Promise<UserTarget> {
     fat_g_daily: input.fat_g_daily,
     calories_max_daily: input.calories_max_daily,
     budget_cents_weekly: input.budget_cents_weekly,
-    store_id: STORE_ID,
     diet_tags: input.diet_tags,
   });
   return target;
 }
 
-/**
- * solve runs the optimizer against a saved target.
- *
- * integer_packs is always true: that's the Phase 4 MILP, which returns whole
- * packs and enforces variety. The Phase 3 LP is still reachable by sending
- * false, but its answer buys 0.22 of a tub of whey — correct arithmetic that
- * would read as a bug to anyone looking at the UI.
- */
+/** Run the whole-pack optimizer against a saved target. */
 export async function solve(targetId: number): Promise<Basket> {
   const { basket } = await post<{ basket: Basket }>("/solve", {
     target_id: targetId,
@@ -195,14 +139,7 @@ export async function solve(targetId: number): Promise<Basket> {
   return basket;
 }
 
-/**
- * solveForTarget is the whole user action: save, then solve.
- *
- * Two requests because /v1/solve only accepts a target_id — it has no inline
- * form of the target. That means every click writes a user_targets row, which
- * I've accepted: the rows are a genuine log of what was asked, and baskets
- * already reference them.
- */
+/** Save a target, then solve it. */
 export async function solveForTarget(
   input: TargetInput,
 ): Promise<{ target: UserTarget; basket: Basket }> {
@@ -210,13 +147,6 @@ export async function solveForTarget(
   const basket = await solve(target.id);
   return { target, basket };
 }
-
-// ------------------------------------------------------------------ Phase 7
-//
-// Two endpoints that both act on the LATEST BASKET FOR A TARGET, which is why
-// they take a target id rather than a basket id: the solve response carries the
-// basket's contents, not its row (a cache hit has no row to name), so the
-// target id is the only identifier the client actually holds.
 
 /** One recipe from POST /v1/recipes. Mirrors recipes.Meal in Go. */
 export interface Meal {
@@ -232,14 +162,7 @@ export interface RecipePlan {
   notes: string[];
 }
 
-/**
- * generateRecipes turns the solved basket into a week of meals.
- *
- * WORTH KNOWING WHEN THIS 404s: the route isn't registered unless the server
- * has an ANTHROPIC_API_KEY. That's deliberate — the solver is the product and
- * the LLM is a finishing layer — so a 404 here means "not configured", not
- * "broken", and the UI says so rather than showing a generic failure.
- */
+/** Generate optional meal suggestions for a solved target. */
 export async function generateRecipes(targetId: number): Promise<RecipePlan> {
   const { plan } = await post<{ plan: RecipePlan }>("/recipes", {
     target_id: targetId,
@@ -247,27 +170,9 @@ export async function generateRecipes(targetId: number): Promise<RecipePlan> {
   return plan;
 }
 
-export interface CartResult {
-  items_added: number;
-  note: string;
-  skipped?: string[];
-}
-
-/**
- * addToKrogerCart pushes the basket into the user's real Kroger cart.
- *
- * NOT IDEMPOTENT, and the UI must not pretend otherwise. Kroger's cart API is
- * additive with no way to read the cart back and no way to remove what was
- * added, so calling this twice doubles the quantities. The success message
- * carries that warning, and the button disables itself after a success.
- *
- * A 401 means no Kroger account is connected yet — the user needs to visit
- * /v1/kroger/authorize in a browser first, which is a full-page navigation
- * rather than a fetch because it ends at Kroger's login screen.
- */
-export async function addToKrogerCart(targetId: number): Promise<CartResult> {
-  const { cart } = await post<{ cart: CartResult }>("/kroger/cart", {
+export async function startKrogerCart(targetId: number): Promise<string> {
+  const { authorize_url } = await post<{ authorize_url: string }>("/kroger/authorize", {
     target_id: targetId,
   });
-  return cart;
+  return authorize_url;
 }
