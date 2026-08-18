@@ -21,6 +21,13 @@ type fakeCartStore struct {
 	exactLines               []store.BasketLine
 	latestErr, exactErr      error
 	gotBasketID, gotTargetID int64
+	gotDigest                []byte
+	targetErr                error
+}
+
+func (f *fakeCartStore) GetTarget(_ context.Context, _ int64, digest []byte) (store.UserTarget, error) {
+	f.gotDigest = append([]byte(nil), digest...)
+	return store.UserTarget{ID: 42}, f.targetErr
 }
 
 func (f *fakeCartStore) LatestBasketForTarget(context.Context, int64) (store.Basket, []store.BasketLine, error) {
@@ -74,6 +81,7 @@ func authorize(t *testing.T, h *CartHandler, body string, origin string) (string
 	r := httptest.NewRequest(http.MethodPost, "/v1/kroger/authorize", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Origin", origin)
+	r.Header.Set("Authorization", "Bearer "+testCapabilityToken)
 	rr := httptest.NewRecorder()
 	h.Authorize(rr, r)
 	if rr.Code != http.StatusOK {
@@ -112,7 +120,8 @@ func result(t *testing.T, rr *httptest.ResponseRecorder) (string, string) {
 }
 
 func TestAuthorizeOriginJSONPrevalidationAndCookie(t *testing.T) {
-	h := newCartHandler(t, validStore(), &fakeCartClient{})
+	st := validStore()
+	h := newCartHandler(t, st, &fakeCartClient{})
 	_, _, rr := authorize(t, h, `{"target_id":42}`, "https://evil.example")
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("origin status=%d", rr.Code)
@@ -135,8 +144,39 @@ func TestAuthorizeOriginJSONPrevalidationAndCookie(t *testing.T) {
 	if rr.Code != http.StatusOK || state == "" {
 		t.Fatalf("valid authorize status=%d", rr.Code)
 	}
+	if string(st.gotDigest) != string(testCapabilityDigest()) {
+		t.Fatal("cart authorize did not propagate the bearer token's exact digest")
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q; want no-store", got)
+	}
 	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.MaxAge <= 0 {
 		t.Fatalf("cookie=%+v", cookie)
+	}
+}
+
+func TestAuthorizeRejectsMissingMalformedAndWrongCapabilities(t *testing.T) {
+	for _, tc := range []struct{ name, token string }{
+		{"missing", ""}, {"malformed", "not-base64!"}, {"wrong", testWrongCapabilityToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := validStore()
+			if tc.name == "wrong" {
+				st.targetErr = store.ErrNotFound
+			}
+			h := newCartHandler(t, st, &fakeCartClient{})
+			req := httptest.NewRequest(http.MethodPost, "/v1/kroger/authorize", strings.NewReader(`{"target_id":42}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", "http://localhost:3000")
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			rr := httptest.NewRecorder()
+			h.Authorize(rr, req)
+			if rr.Code != http.StatusNotFound {
+				t.Fatalf("status = %d; want 404", rr.Code)
+			}
+		})
 	}
 }
 

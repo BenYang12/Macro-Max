@@ -170,8 +170,14 @@ jobs:
           sudo mv migrate /usr/local/bin/migrate
           migrate -version
 
-      - name: Run migrations
-        run: migrate -path migrations -database "$DATABASE_URL" up
+      - name: Verify reversible migrations and apply latest schema
+        # Migration 000006 introduces bearer-capability ownership and is
+        # intentionally irreversible. Exercise rollback through 000005 before
+        # crossing that boundary, then apply the full schema for tests.
+        run: |
+          migrate -path migrations -database "$DATABASE_URL" up 5
+          migrate -path migrations -database "$DATABASE_URL" down -all
+          migrate -path migrations -database "$DATABASE_URL" up
 
       - name: Test
         # TEST_DATABASE_URL is set in the job env above, so the integration
@@ -199,14 +205,6 @@ jobs:
         run: |
           go run ./cmd/seed
           go run ./cmd/seed
-
-      - name: Verify migrations roll back cleanly
-        # A down migration nobody runs is a down migration that doesn't work.
-        # This proves the whole stack can be torn down and rebuilt, which is
-        # what makes `migrate down` trustworthy in an emergency.
-        run: |
-          migrate -path migrations -database "$DATABASE_URL" down -all
-          migrate -path migrations -database "$DATABASE_URL" up
 
   # Python solver job (Phase 3). SEPARATE from the Go job on purpose: they share
   # no dependencies, so running them in parallel halves wall-clock CI time, and a

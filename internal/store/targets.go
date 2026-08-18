@@ -29,14 +29,14 @@ func (s *Store) CreateTarget(ctx context.Context, t *UserTarget) error {
 	query := `
 		INSERT INTO user_targets (label, protein_g_daily, carbs_g_daily, fat_g_daily,
 		                          calories_max_daily, budget_cents_weekly, store_id,
-		                          diet_tags, exclude_food_ids)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		                          diet_tags, exclude_food_ids, capability_digest)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, created_at`
 
 	err := s.Pool.QueryRow(ctx, query,
 		t.Label, t.ProteinGDaily, t.CarbsGDaily, t.FatGDaily,
 		t.CaloriesMaxDaily, t.BudgetCentsWeekly, t.StoreID,
-		t.DietTags, t.ExcludeFoodIDs,
+		t.DietTags, t.ExcludeFoodIDs, t.CapabilityDigest,
 	).Scan(&t.ID, &t.CreatedAt) // write the generated values back through the pointer
 
 	if err != nil {
@@ -46,18 +46,18 @@ func (s *Store) CreateTarget(ctx context.Context, t *UserTarget) error {
 }
 
 // GetTarget returns one target by id, or ErrNotFound.
-func (s *Store) GetTarget(ctx context.Context, id int64) (UserTarget, error) {
+func (s *Store) GetTarget(ctx context.Context, id int64, capabilityDigest []byte) (UserTarget, error) {
 	query := `
 		SELECT id, label, protein_g_daily, carbs_g_daily, fat_g_daily,
 		       calories_max_daily, budget_cents_weekly, store_id,
 		       diet_tags, exclude_food_ids, created_at
 		FROM user_targets
-		WHERE id = $1`
+		WHERE id = $1 AND capability_digest = $2`
 
 	var t UserTarget
 	//.Scan() copies the values from the returned row into my Go variables, writing through the pointers I give it
 	// It represents the step that gets data out of the database result and into my program.
-	err := s.Pool.QueryRow(ctx, query, id).Scan(
+	err := s.Pool.QueryRow(ctx, query, id, capabilityDigest).Scan(
 		&t.ID, &t.Label, &t.ProteinGDaily, &t.CarbsGDaily, &t.FatGDaily,
 		&t.CaloriesMaxDaily, &t.BudgetCentsWeekly, &t.StoreID,
 		&t.DietTags, &t.ExcludeFoodIDs, &t.CreatedAt,

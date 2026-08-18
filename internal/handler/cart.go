@@ -33,6 +33,7 @@ var (
 )
 
 type CartStore interface {
+	GetTarget(ctx context.Context, id int64, capabilityDigest []byte) (store.UserTarget, error)
 	LatestBasketForTarget(ctx context.Context, targetID int64) (store.Basket, []store.BasketLine, error)
 	BasketByIDForTarget(ctx context.Context, basketID, targetID int64) (store.Basket, []store.BasketLine, error)
 }
@@ -101,6 +102,20 @@ func (h *CartHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TargetID == nil || *req.TargetID < 1 {
 		failedValidationResponse(w, map[string]string{"target_id": "must be a positive integer"})
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	digest, ok := capabilityDigest(r)
+	if !ok {
+		notFoundResponse(w)
+		return
+	}
+	if _, err := h.Store.GetTarget(r.Context(), *req.TargetID, digest); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			notFoundResponse(w)
+		} else {
+			serverErrorResponse(w, err)
+		}
 		return
 	}
 	basket, lines, err := h.Store.LatestBasketForTarget(r.Context(), *req.TargetID)

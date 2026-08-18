@@ -6,6 +6,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +22,7 @@ type fakeTargetStore struct {
 	createErr error
 	target    store.UserTarget
 	getErr    error
+	gotDigest []byte
 }
 
 func (f *fakeTargetStore) CreateTarget(ctx context.Context, t *store.UserTarget) error {
@@ -33,7 +36,8 @@ func (f *fakeTargetStore) CreateTarget(ctx context.Context, t *store.UserTarget)
 	return nil
 }
 
-func (f *fakeTargetStore) GetTarget(ctx context.Context, id int64) (store.UserTarget, error) {
+func (f *fakeTargetStore) GetTarget(ctx context.Context, id int64, digest []byte) (store.UserTarget, error) {
+	f.gotDigest = append([]byte(nil), digest...)
 	return f.target, f.getErr
 }
 
@@ -66,6 +70,9 @@ func TestTargetsCreate_ValidReturns201AndLocation(t *testing.T) {
 	}
 	if got := rr.Header().Get("Location"); got != "/v1/targets/7" {
 		t.Errorf("Location = %q; want %q", got, "/v1/targets/7")
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q; want no-store", got)
 	}
 	if fake.created == nil {
 		t.Fatal("store never received a target")
@@ -265,6 +272,7 @@ func TestTargetsGet_UnknownIDReturns404(t *testing.T) {
 	h := NewTargetsHandler(&fakeTargetStore{getErr: store.ErrNotFound})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/targets/42", nil)
+	req.Header.Set("Authorization", "Bearer "+testCapabilityToken)
 	req.SetPathValue("id", "42")
 	rr := httptest.NewRecorder()
 
@@ -276,11 +284,13 @@ func TestTargetsGet_UnknownIDReturns404(t *testing.T) {
 }
 
 func TestTargetsGet_ReturnsTargetEnvelope(t *testing.T) {
-	h := NewTargetsHandler(&fakeTargetStore{
+	fake := &fakeTargetStore{
 		target: store.UserTarget{ID: 3, Label: "bulk", BudgetCentsWeekly: 9000},
-	})
+	}
+	h := NewTargetsHandler(fake)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/targets/3", nil)
+	req.Header.Set("Authorization", "Bearer "+testCapabilityToken)
 	req.SetPathValue("id", "3")
 	rr := httptest.NewRecorder()
 
@@ -298,5 +308,78 @@ func TestTargetsGet_ReturnsTargetEnvelope(t *testing.T) {
 	}
 	if body.Target.Label != "bulk" {
 		t.Errorf("label = %q; want %q", body.Target.Label, "bulk")
+	}
+	if string(fake.gotDigest) != string(testCapabilityDigest()) {
+		t.Fatal("target GET did not propagate the bearer token's exact digest")
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q; want no-store", got)
+	}
+}
+
+func TestTargetsGet_RejectsMalformedAndWrongCapabilities(t *testing.T) {
+	for _, tc := range []struct{ name, token string }{
+		{"malformed", "not-base64!"}, {"wrong", testWrongCapabilityToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeTargetStore{}
+			if tc.name == "wrong" {
+				fake.getErr = store.ErrNotFound
+			}
+			req := httptest.NewRequest(http.MethodGet, "/v1/targets/3", nil)
+			req.SetPathValue("id", "3")
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+			rr := httptest.NewRecorder()
+			NewTargetsHandler(fake).Get(rr, req)
+			if rr.Code != http.StatusNotFound {
+				t.Fatalf("status = %d; want 404", rr.Code)
+			}
+		})
+	}
+}
+
+func TestTargetsGet_RequiresCapability(t *testing.T) {
+	h := NewTargetsHandler(&fakeTargetStore{target: store.UserTarget{ID: 3}})
+	req := httptest.NewRequest(http.MethodGet, "/v1/targets/3", nil)
+	req.SetPathValue("id", "3")
+	rr := httptest.NewRecorder()
+	h.Get(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404", rr.Code)
+	}
+}
+
+func TestTargetsCreate_ReturnsTokenButNeverDigest(t *testing.T) {
+	fake := &fakeTargetStore{}
+	rr := postTarget(t, NewTargetsHandler(fake), `{
+		"label":"private", "protein_g_daily":1, "carbs_g_daily":1,
+		"fat_g_daily":1, "budget_cents_weekly":100
+	}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		CapabilityToken string         `json:"capability_token"`
+		Target          map[string]any `json:"target"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.CapabilityToken) != 43 {
+		t.Fatalf("token length = %d; want 43", len(body.CapabilityToken))
+	}
+	if len(fake.created.CapabilityDigest) != 32 {
+		t.Fatalf("digest length = %d; want 32", len(fake.created.CapabilityDigest))
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(body.CapabilityToken)
+	if err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	wantDigest := sha256.Sum256(raw)
+	if string(fake.created.CapabilityDigest) != string(wantDigest[:]) {
+		t.Fatal("stored digest does not match returned capability")
+	}
+	if _, exposed := body.Target["capability_digest"]; exposed {
+		t.Fatal("target JSON exposed capability digest")
 	}
 }

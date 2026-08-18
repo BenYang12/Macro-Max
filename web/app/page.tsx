@@ -82,7 +82,8 @@ export default function Home() {
   const [error, setError] = useState<ApiErrorBody | null>(null);
   const [solvedFor, setSolvedFor] = useState<{ p: number; c: number; f: number; kcal: number | null } | null>(null);
   const [proteinByFood, setProteinByFood] = useState<Record<string, number>>({});
-  const [targetId, setTargetId] = useState<number | null>(null);
+	const [targetId, setTargetId] = useState<number | null>(null);
+	const [capabilityToken, setCapabilityToken] = useState<string | null>(null);
 
   const [plan, setPlan] = useState<RecipePlan | null>(null);
   const [planLoading, setPlanLoading] = useState(false);
@@ -120,7 +121,7 @@ export default function Home() {
       budgetOverrideCents ?? dollarsToCents(form.budget_dollars_weekly);
 
     try {
-      const { target, basket } = await solveForTarget({
+		const { target, basket, capabilityToken: newCapabilityToken } = await solveForTarget({
         label: "web",
         protein_g_daily: Number(form.protein_g_daily),
         carbs_g_daily: Number(form.carbs_g_daily),
@@ -131,7 +132,8 @@ export default function Home() {
       });
 
       setBasket(basket);
-      setTargetId(target.id);
+		setTargetId(target.id);
+		setCapabilityToken(newCapabilityToken);
       setSolvedFor({
         p: Number(form.protein_g_daily) * 7,
         c: Number(form.carbs_g_daily) * 7,
@@ -163,11 +165,11 @@ export default function Home() {
   }
 
   async function runRecipes() {
-    if (targetId === null) return;
+	if (targetId === null || capabilityToken === null) return;
     setPlanLoading(true);
     setPlanError(null);
     try {
-      setPlan(await generateRecipes(targetId));
+		setPlan(await generateRecipes(targetId, capabilityToken));
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
         setPlanError("Recipe generation is unavailable right now.");
@@ -182,7 +184,7 @@ export default function Home() {
   }
 
   async function runAddToCart() {
-    if (targetId === null) return;
+	if (targetId === null || capabilityToken === null) return;
     // Open synchronously while this function is still handling the click.
     // Waiting for the API first makes browsers classify window.open as an
     // unsolicited popup and block it.
@@ -195,7 +197,7 @@ export default function Home() {
     setCartLoading(true);
     setCartResult(null);
     try {
-      const authorizeURL = await startKrogerCart(targetId);
+		const authorizeURL = await startKrogerCart(targetId, capabilityToken);
       if (popup) {
         popup.location.assign(authorizeURL);
         popup.focus();

@@ -24,7 +24,7 @@ import (
 // SolveStore is this handler's slice of the database, same consumer-side
 // interface pattern as everywhere else.
 type SolveStore interface {
-	GetTarget(ctx context.Context, id int64) (store.UserTarget, error)
+	GetTarget(ctx context.Context, id int64, capabilityDigest []byte) (store.UserTarget, error)
 	ListSolveCandidates(ctx context.Context, storeID string, dietTags []string, excludeFoodIDs []int64) ([]store.Product, error)
 	ListFoodsByIDs(ctx context.Context, ids []int64) (map[int64]store.Food, error)
 	SaveBasket(ctx context.Context, b *store.Basket, items []store.BasketItem) error
@@ -80,8 +80,13 @@ func (h *SolveHandler) Solve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	target, err := h.Store.GetTarget(ctx, *req.TargetID)
+	w.Header().Set("Cache-Control", "no-store")
+	digest, ok := capabilityDigest(r)
+	if !ok {
+		notFoundResponse(w)
+		return
+	}
+	target, err := h.Store.GetTarget(ctx, *req.TargetID, digest)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			notFoundResponse(w)

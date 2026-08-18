@@ -128,5 +128,6 @@ type UserTarget struct {
 	DietTags       []string `json:"diet_tags"`
 	ExcludeFoodIDs []int64  `json:"exclude_food_ids"`
 
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	CapabilityDigest []byte    `json:"-"`
 }

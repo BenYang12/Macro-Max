@@ -27,7 +27,7 @@ import (
 // else. Same consumer-side interface pattern as every other handler, and the
 // reason the test below needs neither Postgres nor a network.
 type RecipeStore interface {
-	GetTarget(ctx context.Context, id int64) (store.UserTarget, error)
+	GetTarget(ctx context.Context, id int64, capabilityDigest []byte) (store.UserTarget, error)
 	LatestBasketForTarget(ctx context.Context, targetID int64) (store.Basket, []store.BasketLine, error)
 }
 
@@ -67,8 +67,13 @@ func (h *RecipesHandler) Generate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	target, err := h.Store.GetTarget(ctx, *req.TargetID)
+	w.Header().Set("Cache-Control", "no-store")
+	digest, ok := capabilityDigest(r)
+	if !ok {
+		notFoundResponse(w)
+		return
+	}
+	target, err := h.Store.GetTarget(ctx, *req.TargetID, digest)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			notFoundResponse(w)

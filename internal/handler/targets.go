@@ -16,7 +16,7 @@ import (
 
 type TargetStore interface {
 	CreateTarget(ctx context.Context, t *store.UserTarget) error
-	GetTarget(ctx context.Context, id int64) (store.UserTarget, error)
+	GetTarget(ctx context.Context, id int64, capabilityDigest []byte) (store.UserTarget, error)
 }
 
 type TargetsHandler struct {
@@ -42,6 +42,7 @@ type createTargetRequest struct {
 
 // Create handles POST /v1/targets
 func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var req createTargetRequest
 
 	// readJSON takes JSON body a client sent and fills Go struct with it
@@ -131,6 +132,12 @@ func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		DietTags:          req.DietTags,
 		ExcludeFoodIDs:    req.ExcludeFoodIDs,
 	}
+	capabilityToken, digest, err := newCapability()
+	if err != nil {
+		serverErrorResponse(w, err)
+		return
+	}
+	target.CapabilityDigest = digest
 
 	// Postgres columns are NOT NULL DEFAULT '{}', and a nil Go slice would be
 	// sent as SQL NULL, violating that. Normalize nil to empty so an omitted
@@ -156,7 +163,7 @@ func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// correctness details that make an API feel professional.
 	w.Header().Set("Location", fmt.Sprintf("/v1/targets/%d", target.ID))
 
-	if err := writeJSON(w, http.StatusCreated, envelope{"target": target}); err != nil {
+	if err := writeJSON(w, http.StatusCreated, envelope{"target": target, "capability_token": capabilityToken}); err != nil {
 		serverErrorResponse(w, err)
 	}
 
@@ -170,7 +177,13 @@ func (h *TargetsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, err := h.Store.GetTarget(r.Context(), id)
+	w.Header().Set("Cache-Control", "no-store")
+	digest, ok := capabilityDigest(r)
+	if !ok {
+		notFoundResponse(w)
+		return
+	}
+	target, err := h.Store.GetTarget(r.Context(), id, digest)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			notFoundResponse(w)

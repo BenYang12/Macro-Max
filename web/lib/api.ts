@@ -91,10 +91,13 @@ export interface TargetInput {
   diet_tags: string[];
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+async function post<T>(path: string, body: unknown, capabilityToken?: string): Promise<T> {
+	const res = await fetch(`/api${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+		headers: {
+			"Content-Type": "application/json",
+			...(capabilityToken ? { Authorization: `Bearer ${capabilityToken}` } : {}),
+		},
     body: JSON.stringify(body),
   });
 
@@ -117,8 +120,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 /** Save targets and return their database identifier. */
-export async function createTarget(input: TargetInput): Promise<UserTarget> {
-  const { target } = await post<{ target: UserTarget }>("/targets", {
+export async function createTarget(input: TargetInput): Promise<{ target: UserTarget; capabilityToken: string }> {
+	const { target, capability_token } = await post<{ target: UserTarget; capability_token: string }>("/targets", {
     label: input.label,
     protein_g_daily: input.protein_g_daily,
     carbs_g_daily: input.carbs_g_daily,
@@ -127,25 +130,25 @@ export async function createTarget(input: TargetInput): Promise<UserTarget> {
     budget_cents_weekly: input.budget_cents_weekly,
     diet_tags: input.diet_tags,
   });
-  return target;
+	return { target, capabilityToken: capability_token };
 }
 
 /** Run the whole-pack optimizer against a saved target. */
-export async function solve(targetId: number): Promise<Basket> {
+export async function solve(targetId: number, capabilityToken: string): Promise<Basket> {
   const { basket } = await post<{ basket: Basket }>("/solve", {
     target_id: targetId,
     integer_packs: true,
-  });
+	}, capabilityToken);
   return basket;
 }
 
 /** Save a target, then solve it. */
 export async function solveForTarget(
   input: TargetInput,
-): Promise<{ target: UserTarget; basket: Basket }> {
-  const target = await createTarget(input);
-  const basket = await solve(target.id);
-  return { target, basket };
+): Promise<{ target: UserTarget; basket: Basket; capabilityToken: string }> {
+	const { target, capabilityToken } = await createTarget(input);
+	const basket = await solve(target.id, capabilityToken);
+	return { target, basket, capabilityToken };
 }
 
 /** One recipe from POST /v1/recipes. Mirrors recipes.Meal in Go. */
@@ -163,16 +166,16 @@ export interface RecipePlan {
 }
 
 /** Generate optional meal suggestions for a solved target. */
-export async function generateRecipes(targetId: number): Promise<RecipePlan> {
+export async function generateRecipes(targetId: number, capabilityToken: string): Promise<RecipePlan> {
   const { plan } = await post<{ plan: RecipePlan }>("/recipes", {
     target_id: targetId,
-  });
+	}, capabilityToken);
   return plan;
 }
 
-export async function startKrogerCart(targetId: number): Promise<string> {
+export async function startKrogerCart(targetId: number, capabilityToken: string): Promise<string> {
   const { authorize_url } = await post<{ authorize_url: string }>("/kroger/authorize", {
     target_id: targetId,
-  });
+	}, capabilityToken);
   return authorize_url;
 }

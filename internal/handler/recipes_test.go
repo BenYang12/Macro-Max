@@ -27,9 +27,11 @@ type fakeRecipeStore struct {
 	targetErr error
 	lines     []store.BasketLine
 	basketErr error
+	gotDigest []byte
 }
 
-func (f *fakeRecipeStore) GetTarget(ctx context.Context, id int64) (store.UserTarget, error) {
+func (f *fakeRecipeStore) GetTarget(ctx context.Context, id int64, digest []byte) (store.UserTarget, error) {
+	f.gotDigest = append([]byte(nil), digest...)
 	return f.target, f.targetErr
 }
 
@@ -56,9 +58,32 @@ func (f *fakeGenerator) Generate(ctx context.Context, req recipes.Request) (reci
 func postRecipes(t *testing.T, h *RecipesHandler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/recipes", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testCapabilityToken)
 	rr := httptest.NewRecorder()
 	h.Generate(rr, req)
 	return rr
+}
+
+func TestRecipes_RejectsMissingMalformedAndWrongCapabilities(t *testing.T) {
+	for _, tc := range []struct{ name, token string }{
+		{"missing", ""}, {"malformed", "not-base64!"}, {"wrong", testWrongCapabilityToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := recipeStoreFake()
+			if tc.name == "wrong" {
+				st.targetErr = store.ErrNotFound
+			}
+			req := httptest.NewRequest(http.MethodPost, "/v1/recipes", strings.NewReader(`{"target_id":7}`))
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			rr := httptest.NewRecorder()
+			NewRecipesHandler(st, &fakeGenerator{}).Generate(rr, req)
+			if rr.Code != http.StatusNotFound {
+				t.Fatalf("status = %d; want 404", rr.Code)
+			}
+		})
+	}
 }
 
 // recipeStoreFake builds a store fake whose basket contains the SAME FOOD TWICE, under
@@ -96,6 +121,9 @@ func TestRecipes_AggregatesGramsByFood(t *testing.T) {
 	h := NewRecipesHandler(recipeStoreFake(), gen)
 
 	rr := postRecipes(t, h, `{"target_id": 7}`)
+	if string(h.Store.(*fakeRecipeStore).gotDigest) != string(testCapabilityDigest()) {
+		t.Fatal("recipes did not propagate the bearer token's exact digest")
+	}
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
 	}

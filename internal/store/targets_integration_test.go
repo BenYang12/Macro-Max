@@ -26,6 +26,7 @@ func TestCreateAndGetTarget_RoundTrip(t *testing.T) {
 		DietTags:          []string{"gluten_free"},
 		ExcludeFoodIDs:    []int64{1, 2, 3},
 	}
+	target.CapabilityDigest = make([]byte, 32)
 
 	if err := st.CreateTarget(ctx, &target); err != nil {
 		t.Fatalf("CreateTarget: %v", err)
@@ -43,13 +44,18 @@ func TestCreateAndGetTarget_RoundTrip(t *testing.T) {
 		st.Pool.Exec(context.Background(), `DELETE FROM user_targets WHERE id = $1`, target.ID)
 	})
 
-	got, err := st.GetTarget(ctx, target.ID)
+	got, err := st.GetTarget(ctx, target.ID, target.CapabilityDigest)
 	if err != nil {
 		t.Fatalf("GetTarget: %v", err)
 	}
 
 	if got.Label != target.Label {
 		t.Errorf("label = %q; want %q", got.Label, target.Label)
+	}
+	wrongDigest := make([]byte, 32)
+	wrongDigest[0] = 1
+	if _, err := st.GetTarget(ctx, target.ID, wrongDigest); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong capability: expected ErrNotFound; got %v", err)
 	}
 	// The nullable column survived as a real value, not nil.
 	if got.CaloriesMaxDaily == nil {
@@ -78,6 +84,7 @@ func TestCreateTarget_NilCaloriesStaysNil(t *testing.T) {
 		FatGDaily: 50, BudgetCentsWeekly: 6000, StoreID: UniversityPlaceStoreID,
 		DietTags: []string{}, ExcludeFoodIDs: []int64{},
 	}
+	target.CapabilityDigest = make([]byte, 32)
 
 	if err := st.CreateTarget(ctx, &target); err != nil {
 		t.Fatalf("CreateTarget: %v", err)
@@ -86,7 +93,7 @@ func TestCreateTarget_NilCaloriesStaysNil(t *testing.T) {
 		st.Pool.Exec(context.Background(), `DELETE FROM user_targets WHERE id = $1`, target.ID)
 	})
 
-	got, err := st.GetTarget(ctx, target.ID)
+	got, err := st.GetTarget(ctx, target.ID, target.CapabilityDigest)
 	if err != nil {
 		t.Fatalf("GetTarget: %v", err)
 	}
@@ -98,7 +105,7 @@ func TestCreateTarget_NilCaloriesStaysNil(t *testing.T) {
 func TestGetTarget_UnknownIDIsNotFound(t *testing.T) {
 	st := newTestStore(t)
 
-	_, err := st.GetTarget(context.Background(), 999_999_999)
+	_, err := st.GetTarget(context.Background(), 999_999_999, make([]byte, 32))
 
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound; got %v", err)

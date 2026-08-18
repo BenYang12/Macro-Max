@@ -16,7 +16,7 @@ async function mockSolveAPI(page: Page, authorizeFails = false) {
       const body = request.postDataJSON();
       expect(body).toMatchObject({ protein_g_daily: 180, budget_cents_weekly: 12000 });
       expect(body).not.toHaveProperty("store_id");
-      await route.fulfill({ json: { target: {
+      await route.fulfill({ json: { capability_token: "test-capability", target: {
         id: 42, label: "web", protein_g_daily: 180, carbs_g_daily: 200,
         fat_g_daily: 60, calories_max_daily: null, budget_cents_weekly: 12000,
         store_id: STORE_ID, diet_tags: [], exclude_food_ids: [],
@@ -25,6 +25,7 @@ async function mockSolveAPI(page: Page, authorizeFails = false) {
       return;
     }
     if (url.pathname === "/api/solve") {
+		expect(request.headers()["authorization"]).toBe("Bearer test-capability");
       expect(request.postDataJSON()).toEqual({ target_id: 42, integer_packs: true });
       await route.fulfill({ json: { basket: {
         status: "optimal",
@@ -38,6 +39,7 @@ async function mockSolveAPI(page: Page, authorizeFails = false) {
     if (url.pathname === "/api/kroger/authorize") {
       expect(request.method()).toBe("POST");
       expect(request.postDataJSON()).toEqual({ target_id: 42 });
+		expect(request.headers()["authorization"]).toBe("Bearer test-capability");
       if (authorizeFails) {
         await route.fulfill({
           status: 403,
@@ -75,7 +77,7 @@ test("does not claim fields are highlighted when the store catalog is unavailabl
       return;
     }
     if (url.pathname === "/api/targets") {
-      await route.fulfill({ json: { target: { id: 42 } } });
+      await route.fulfill({ json: { capability_token: "test-capability", target: { id: 42 } } });
       return;
     }
     if (url.pathname === "/api/solve") {

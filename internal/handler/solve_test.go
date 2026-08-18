@@ -33,9 +33,11 @@ type fakeSolveStore struct {
 	savedBasket *store.Basket
 	savedItems  []store.BasketItem
 	saveErr     error
+	gotDigest   []byte
 }
 
-func (f *fakeSolveStore) GetTarget(ctx context.Context, id int64) (store.UserTarget, error) {
+func (f *fakeSolveStore) GetTarget(ctx context.Context, id int64, digest []byte) (store.UserTarget, error) {
+	f.gotDigest = append([]byte(nil), digest...)
 	return f.target, f.targetErr
 }
 
@@ -118,15 +120,50 @@ func okSolver() *fakeSolver {
 func postSolve(t *testing.T, h *SolveHandler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/solve", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testCapabilityToken)
 	rr := httptest.NewRecorder()
 	h.Solve(rr, req)
 	return rr
+}
+
+func TestSolve_RequiresCapability(t *testing.T) {
+	h := NewSolveHandler(okStore(), okSolver(), nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/solve", strings.NewReader(`{"target_id":1}`))
+	rr := httptest.NewRecorder()
+	h.Solve(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404", rr.Code)
+	}
+}
+
+func TestSolve_RejectsMalformedAndWrongCapabilities(t *testing.T) {
+	for _, tc := range []struct{ name, token string }{
+		{"malformed", "not-base64!"},
+		{"wrong", testWrongCapabilityToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := okStore()
+			if tc.name == "wrong" {
+				st.targetErr = store.ErrNotFound
+			}
+			req := httptest.NewRequest(http.MethodPost, "/v1/solve", strings.NewReader(`{"target_id":1}`))
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+			rr := httptest.NewRecorder()
+			NewSolveHandler(st, okSolver(), nil).Solve(rr, req)
+			if rr.Code != http.StatusNotFound {
+				t.Fatalf("status = %d; want 404", rr.Code)
+			}
+		})
+	}
 }
 
 func TestSolve_HappyPathReturnsBasket(t *testing.T) {
 	h := NewSolveHandler(okStore(), okSolver(), nil)
 
 	rr := postSolve(t, h, `{"target_id": 1}`)
+	if string(h.Store.(*fakeSolveStore).gotDigest) != string(testCapabilityDigest()) {
+		t.Fatal("solve did not propagate the bearer token's exact digest")
+	}
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200. body: %s", rr.Code, rr.Body.String())

@@ -19,8 +19,36 @@ API already falls back to solving without it.
 4. Keep the connection string private. It becomes `DATABASE_URL` on Render and
    `NEON_DATABASE_URL` in GitHub Actions.
 
-The Render container automatically applies migrations 1–5 and idempotently
+The Render container automatically applies migrations 1–6 and idempotently
 seeds the food catalog whenever it starts.
+
+### Irreversible capability migration
+
+Migration `000006` adds the digests that authorize access to targets. Its down
+migration deliberately fails instead of dropping those digests: removing them
+would silently remove authorization from existing records. Roll back application
+code only to a capability-aware build that is compatible with schema version 6,
+or forward-fix the current build. Never deploy pre-capability code against schema
+version 6 or later: its writes omit the required digest and its reads do not
+enforce capability ownership.
+
+An attempted rollback across `000006` can leave `golang-migrate` at dirty
+version 6 even though the down migration fails before changing the schema. If
+that happens:
+
+1. Confirm `user_targets.capability_digest` still exists and migration 6's
+   schema is intact.
+2. Mark that unchanged schema as version 6 again:
+
+   ```sh
+   migrate -path migrations -database "$DATABASE_URL" force 6
+   ```
+
+3. Run `migrate -path migrations -database "$DATABASE_URL" up` and verify the
+   API healthcheck.
+
+Do not force version 5 or manually drop `capability_digest`; either action can
+remove the ownership boundary protecting persisted targets.
 
 ## 2. Deploy the backend on Render
 
