@@ -124,3 +124,18 @@ test("keeps the basket visible when cart initiation fails", async ({ page }) => 
   await expect(page.getByText(/request did not come from this application/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Shopping list" })).toBeVisible();
 });
+
+test("opens Kroger authorization in a popup", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_KROGER_CART !== "true", "cart UI is disabled by default");
+  await mockSolveAPI(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Find the cheapest basket" }).click();
+
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Add to my Kroger cart" }).click();
+  const popup = await popupPromise;
+  await popup.waitForURL("**/kroger-login");
+
+  await expect(page.getByRole("heading", { name: "Shopping list" })).toBeVisible();
+  await popup.close();
+});

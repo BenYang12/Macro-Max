@@ -183,11 +183,28 @@ export default function Home() {
 
   async function runAddToCart() {
     if (targetId === null) return;
+    // Open synchronously while this function is still handling the click.
+    // Waiting for the API first makes browsers classify window.open as an
+    // unsolicited popup and block it.
+    const popup = window.open(
+      "about:blank",
+      "macro-max-kroger-cart",
+      "popup,width=560,height=760,resizable=yes,scrollbars=yes",
+    );
+    if (popup) popup.opener = null;
     setCartLoading(true);
     setCartResult(null);
     try {
-      window.location.assign(await startKrogerCart(targetId));
+      const authorizeURL = await startKrogerCart(targetId);
+      if (popup) {
+        popup.location.assign(authorizeURL);
+        popup.focus();
+      } else {
+        // Popup blocking should not make the cart action unusable.
+        window.location.assign(authorizeURL);
+      }
     } catch (error) {
+      popup?.close();
       setCartLoading(false);
       setCartResult({
         success: false,
