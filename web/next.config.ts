@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 // Keep browser requests same-origin and proxy them to the Go API.
-const API_URL = process.env.API_URL ?? "http://localhost:4000";
+const API_URL =
+  process.env.NODE_ENV === "production"
+    ? "https://macro-max-api.onrender.com"
+    : (process.env.API_URL ?? "http://localhost:4000");
 
 const nextConfig: NextConfig = {
   turbopack: {
