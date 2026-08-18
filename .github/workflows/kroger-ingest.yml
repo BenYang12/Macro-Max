@@ -1,7 +1,6 @@
 name: Refresh Kroger prices
 
 on:
-  # Refresh University Place (location 09700117) each morning.
   schedule:
     - cron: "17 10 * * *"
   workflow_dispatch:
@@ -12,7 +11,6 @@ on:
         default: true
         required: true
 
-# Never let two refreshes race to update availability and price history.
 concurrency:
   group: kroger-price-refresh
   cancel-in-progress: false
@@ -22,29 +20,36 @@ permissions:
 
 jobs:
   ingest:
-    name: Refresh deployed product prices
+    name: Refresh prices in Neon
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      FLY_APP: ${{ vars.MACRO_MAX_FLY_API_APP }}
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      KROGER_CLIENT_ID: ${{ secrets.KROGER_CLIENT_ID }}
+      KROGER_CLIENT_SECRET: ${{ secrets.KROGER_CLIENT_SECRET }}
 
     steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Validate configuration
         shell: bash
         run: |
-          test -n "$FLY_API_TOKEN" || { echo "Missing FLY_API_TOKEN secret"; exit 1; }
-          test -n "$FLY_APP" || { echo "Missing MACRO_MAX_FLY_API_APP variable"; exit 1; }
-          [[ "$FLY_APP" =~ ^[a-z0-9-]+$ ]] || { echo "Invalid Fly app name"; exit 1; }
-
-      - name: Set up Fly CLI
-        uses: superfly/flyctl-actions/setup-flyctl@master
+          test -n "$DATABASE_URL" || { echo "Missing NEON_DATABASE_URL secret"; exit 1; }
+          test -n "$KROGER_CLIENT_ID" || { echo "Missing KROGER_CLIENT_ID secret"; exit 1; }
+          test -n "$KROGER_CLIENT_SECRET" || { echo "Missing KROGER_CLIENT_SECRET secret"; exit 1; }
 
       - name: Refresh prices
         shell: bash
         run: |
-          ingest_command="krogeringest"
+          args=()
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
-            ingest_command="$ingest_command -dry-run"
+            args+=("-dry-run")
           fi
-          flyctl ssh console --app "$FLY_APP" --command "$ingest_command"
+          go run ./cmd/krogeringest "${args[@]}"

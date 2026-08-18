@@ -114,6 +114,12 @@ make kroger-ingest
 
 ## Deployment
 
-The repository includes Fly configuration for the API and solver, plus a Next.js frontend suitable for Vercel. See [docs/DEPLOY.md](docs/DEPLOY.md) for the required secrets, callback URL, migration order, and production checks.
+The no-billing deployment uses Vercel Hobby for the frontend, one Render Free
+container for the Go API and Python solver, and Neon Free for PostgreSQL. See
+[docs/DEPLOY.md](docs/DEPLOY.md) for the dashboard setup, environment variables,
+and production checks.
 
-Price refreshes run from `.github/workflows/kroger-ingest.yml` against the fixed University Place location. The importer records price history only when a price changes and marks products unavailable when they disappear from the catalog.
+Price refreshes run from `.github/workflows/kroger-ingest.yml` directly against
+Neon for the fixed University Place location. The importer records price
+history only when a price changes and marks products unavailable when they
+disappear from the catalog.

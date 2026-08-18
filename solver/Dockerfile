@@ -21,18 +21,22 @@ ENV PYTHONPATH=/app:/app/gen
 
 # Install uv itself, from its official image, by copying the single static
 # binary. Faster and smaller than pip-installing it.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.8.13 /uv /usr/local/bin/uv
 
 # Dependency layer FIRST, source SECOND. Docker caches each layer, so as long as
 # pyproject.toml is unchanged, editing lp.py reuses the cached dependency
 # install instead of redownloading OR-Tools (which is ~100MB). Getting this
 # order wrong makes every rebuild painfully slow.
-COPY pyproject.toml ./
-RUN uv pip install --system --no-cache \
-    "ortools>=9.11" "grpcio>=1.67" "protobuf>=5.29"
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+ENV PATH="/app/.venv/bin:$PATH"
 
 COPY gen/ ./gen/
 COPY lp.py milp.py server.py ./
+
+RUN useradd --create-home --uid 10001 macrocart && chown -R macrocart:macrocart /app
+USER macrocart
 
 EXPOSE 50051
 

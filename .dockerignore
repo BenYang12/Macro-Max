@@ -31,11 +31,12 @@
 web/
 
 # --------------------------------------------------------------------- python
-# The solver has its own Dockerfile and its own build context.
-solver/
+# The Render image combines the API and solver, so solver source stays in the
+# root build context. Generated Python artifacts remain excluded below.
 **/__pycache__
 **/*.pyc
 **/*.egg-info
+**/.venv
 
 # ----------------------------------------------------------- local dev cruft
 docker-compose.yml

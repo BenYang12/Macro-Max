@@ -64,19 +64,24 @@ func main() {
 	// Redis, for the solve cache. Like the solver, this is NOT fatal: a cache
 	// that can take down the API is worse than no cache at all. If Redis is
 	// unreachable the handler simply computes every solve.
-	cache, err := solver.NewCache(cfg.RedisURL)
-	if err != nil {
-		log.Printf("warning: solve cache unavailable (%v); every solve will be computed", err)
-		cache = nil
+	var cache *solver.Cache
+	if cfg.RedisURL == "disabled" {
+		log.Println("solve cache disabled; every solve will be computed")
 	} else {
-		defer func() { _ = cache.Close() }()
-		pingCtx, cancelPing := context.WithTimeout(ctx, 2*time.Second)
-		if err := cache.Ping(pingCtx); err != nil {
-			log.Printf("warning: redis ping failed (%v); solves will not be cached", err)
+		cache, err = solver.NewCache(cfg.RedisURL)
+		if err != nil {
+			log.Printf("warning: solve cache unavailable (%v); every solve will be computed", err)
+			cache = nil
 		} else {
-			log.Printf("solve cache connected to %s", cfg.RedisURL)
+			defer func() { _ = cache.Close() }()
+			pingCtx, cancelPing := context.WithTimeout(ctx, 2*time.Second)
+			if err := cache.Ping(pingCtx); err != nil {
+				log.Printf("warning: redis ping failed (%v); solves will not be cached", err)
+			} else {
+				log.Printf("solve cache connected to %s", cfg.RedisURL)
+			}
+			cancelPing()
 		}
-		cancelPing()
 	}
 
 	// The Kroger client supports cart authorization when credentials exist.

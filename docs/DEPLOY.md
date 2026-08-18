@@ -1,93 +1,97 @@
-# Deployment
+# Deploy Macro-Max
 
-Macro-Max deploys as three services:
+The portfolio deployment uses three free services and does not require a
+billing account:
 
-- Go API on Fly.io
-- private Python solver on Fly.io
-- Next.js frontend on Vercel
+- **Vercel Hobby** hosts the Next.js frontend in `web/`.
+- **Render Free** runs one container containing both the Go API and Python
+  solver.
+- **Neon Free** provides PostgreSQL.
 
-Postgres and Redis are runtime dependencies. The only supported product catalog is Harris Teeter at University Place, Kroger location `09700117`.
+Redis is intentionally omitted in production. It is only a solve cache, and the
+API already falls back to solving without it.
 
-## 1. Deploy the solver and API
+## 1. Create the Neon database
 
-Create the Fly apps and managed data services, then configure the API secrets:
+1. Sign in at <https://console.neon.tech> with GitHub.
+2. Create a project named `macro-max` in a US East region.
+3. On the project dashboard, copy the **pooled** connection string.
+4. Keep the connection string private. It becomes `DATABASE_URL` on Render and
+   `NEON_DATABASE_URL` in GitHub Actions.
 
-```bash
-fly apps create macrocart-solver
-fly apps create macrocart-api
-fly postgres create --name macrocart-db
-fly postgres attach macrocart-db --app macrocart-api
-fly redis create
+The Render container automatically applies migrations 1–5 and idempotently
+seeds the food catalog whenever it starts.
 
-fly secrets set --app macrocart-api \
-  KROGER_CLIENT_ID=... \
-  KROGER_CLIENT_SECRET=... \
-  WEB_APP_URL=https://YOUR-PROJECT.vercel.app
-```
+## 2. Deploy the backend on Render
 
-Optional API secrets:
+1. Sign in at <https://dashboard.render.com> with GitHub.
+2. Choose **New > Blueprint**.
+3. Select the `BenYang12/Macro-Max` repository.
+4. Render detects the root `render.yaml`. Approve the `macro-max-api` free web
+   service.
+5. Enter the requested environment variables:
 
-```bash
-fly secrets set --app macrocart-api FDC_API_KEY=... ANTHROPIC_API_KEY=...
-```
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | Neon pooled connection string |
+| `WEB_APP_URL` | Expected Vercel origin, such as `https://macro-max.vercel.app` |
+| `KROGER_CLIENT_ID` | Optional; leave blank initially |
+| `KROGER_CLIENT_SECRET` | Optional; leave blank initially |
+| `FDC_API_KEY` | Optional |
+| `ANTHROPIC_API_KEY` | Optional and not free |
 
-Deploy the solver first so the API can reach `macrocart-solver.internal:50051`:
+6. Create the Blueprint and wait for the deploy to become **Live**.
+7. Copy the service URL, such as `https://macro-max-api.onrender.com`.
+8. Verify `https://YOUR-SERVICE.onrender.com/v1/healthcheck` returns an `ok`
+   status.
 
-```bash
-fly deploy --config solver/fly.toml
-fly deploy
-```
+The free service sleeps after inactivity. The first request after sleep can be
+slow because it wakes the API, solver, and database.
 
-Apply migrations 1–5 to the production database, seed the food catalog, and run the Kroger importer once. There is no Kroger token table and no token-encryption secret.
+## 3. Deploy the frontend on Vercel
 
-## 2. Deploy the frontend
-
-Import `web/` as a Vercel project and set:
+1. Sign in at <https://vercel.com> with GitHub and import this repository.
+2. Set **Root Directory** to `web`.
+3. Keep the detected Next.js build settings.
+4. Add these environment variables for Production, Preview, and Development:
 
 ```text
-API_URL=https://macrocart-api.fly.dev
-NEXT_PUBLIC_KROGER_CART=true
+API_URL=https://YOUR-SERVICE.onrender.com
+NEXT_PUBLIC_KROGER_CART=false
+NEXT_PUBLIC_ANTHROPIC_RECIPES=false
 ```
 
-Only if recipes are configured on the API, also set:
+5. Deploy and copy the final `https://YOUR-PROJECT.vercel.app` origin.
+6. If that origin differs from `WEB_APP_URL` on Render, update the Render value
+   and redeploy the backend.
 
-```text
-NEXT_PUBLIC_ANTHROPIC_RECIPES=true
-```
+## 4. Optional Kroger integration
 
-Use the final Vercel production origin as `WEB_APP_URL` on Fly. It must be an origin only: HTTPS scheme and host, with no path, query, fragment, or trailing application route.
-
-## 3. Register the Kroger callback
-
-Register the frontend-origin callback exactly:
+In the Kroger developer portal, register this exact callback:
 
 ```text
 https://YOUR-PROJECT.vercel.app/api/kroger/callback
 ```
 
-The Vercel app proxies that path to the Go callback. Kroger redirect matching is exact, including scheme, host, and path. Enable `cart.basic:write` for the developer application.
+Enable `product.compact` and `cart.basic:write`, then set the two Kroger secrets
+on Render. Change `NEXT_PUBLIC_KROGER_CART` to `true` on Vercel and redeploy.
 
-Macro-Max does not store Kroger accounts or OAuth tokens. Each cart fill starts a new authorization, uses its access token during the callback, and discards it.
+For scheduled price updates, add these GitHub Actions secrets:
 
-## 4. Schedule price refreshes
+| Secret | Value |
+|---|---|
+| `NEON_DATABASE_URL` | Neon pooled connection string |
+| `KROGER_CLIENT_ID` | Kroger application client ID |
+| `KROGER_CLIENT_SECRET` | Kroger application client secret |
 
-Configure the GitHub repository:
-
-| Setting | Kind | Value |
-|---|---|---|
-| `FLY_API_TOKEN` | Actions secret | App-scoped Fly SSH token |
-| `MACRO_MAX_FLY_API_APP` | Actions variable | API app name, such as `macrocart-api` |
-
-The scheduled workflow runs the importer for location `09700117`; no location variable is accepted. Dispatch it once with **dry run** enabled, review the mappings, then dispatch a real ingest before relying on the schedule.
+Run **Refresh Kroger prices** manually with `dry_run` enabled before the first
+real import.
 
 ## Production checks
 
-1. `fly status --app macrocart-solver` reports a healthy private solver.
-2. `fly status --app macrocart-api` reports a passing `/v1/healthcheck` check.
-3. The Vercel UI displays the University Place address and returns an optimized basket.
-4. A low budget reports the minimum feasible amount.
-5. A dry-run price refresh succeeds, followed by one real refresh.
-6. Kroger OAuth returns through the Vercel callback and fills one deliberately small cart.
-7. Recipe generation appears only when both recipe settings are configured.
-
-Cart writes are additive and cannot be undone through the public Kroger API.
+1. Render reports the service as **Live**.
+2. The Render health endpoint returns `database: ok`.
+3. The Vercel page displays the University Place catalog.
+4. A normal target returns an optimized basket.
+5. A deliberately low budget reports the minimum feasible amount.
+6. If Kroger is enabled, OAuth returns through Vercel and fills a small cart.
