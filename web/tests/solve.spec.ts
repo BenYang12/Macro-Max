@@ -67,6 +67,39 @@ test("solves against the fixed University Place catalog", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Take it with you" })).toHaveCount(cartEnabled ? 1 : 0);
 });
 
+test("does not claim fields are highlighted when the store catalog is unavailable", async ({ page }) => {
+  await page.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/foods") {
+      await route.fulfill({ json: { foods: [] } });
+      return;
+    }
+    if (url.pathname === "/api/targets") {
+      await route.fulfill({ json: { target: { id: 42 } } });
+      return;
+    }
+    if (url.pathname === "/api/solve") {
+      await route.fulfill({
+        status: 422,
+        json: {
+          error: {
+            code: "validation_failed",
+            message: "the request contained invalid values",
+            fields: { store_id: "no available products" },
+          },
+        },
+      });
+      return;
+    }
+    throw new Error(`Unexpected API request: ${route.request().method()} ${url.pathname}`);
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Find the cheapest basket" }).click();
+  await expect(page.getByRole("heading", { name: "Store catalog unavailable" })).toBeVisible();
+  await expect(page.getByText("Check the highlighted fields")).toHaveCount(0);
+});
+
 test("shows and clears the cart callback result", async ({ page }) => {
   await page.route("**/api/foods", (route) => route.fulfill({ json: { foods: [] } }));
   await page.goto("/?cart=success");

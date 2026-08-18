@@ -28,6 +28,13 @@ const DIET_TAGS = [
 ];
 const RECIPES_ENABLED = process.env.NEXT_PUBLIC_ANTHROPIC_RECIPES === "true";
 const CART_ENABLED = process.env.NEXT_PUBLIC_KROGER_CART === "true";
+const FORM_FIELD_ORDER = [
+  "protein_g_daily",
+  "carbs_g_daily",
+  "fat_g_daily",
+  "calories_max_daily",
+  "budget_cents_weekly",
+] as const;
 
 interface FormState {
   protein_g_daily: string;
@@ -211,19 +218,13 @@ export default function Home() {
 
   useEffect(() => {
     if (!error || !isValidationError(error)) return;
-    const FIELD_ORDER = [
-      "protein_g_daily",
-      "carbs_g_daily",
-      "fat_g_daily",
-      "calories_max_daily",
-      "budget_cents_weekly",
-    ];
-    const first = FIELD_ORDER.find((f) => error.fields[f]);
+    const first = FORM_FIELD_ORDER.find((f) => error.fields[f]);
     if (first) document.getElementById(first)?.focus();
   }, [error]);
 
   const fieldErrors =
     error && isValidationError(error) ? error.fields : ({} as Record<string, string>);
+  const hasHighlightedField = FORM_FIELD_ORDER.some((field) => fieldErrors[field]);
 
   return (
     <main id="main" className="page-shell">
@@ -395,8 +396,15 @@ export default function Home() {
         )}
 
         {error && isValidationError(error) && (
-          <Callout tone="error" title="Check the highlighted fields">
-            <p>{error.message}</p>
+          <Callout
+            tone="error"
+            title={hasHighlightedField ? "Check the highlighted fields" : "Store catalog unavailable"}
+          >
+            <p>
+              {hasHighlightedField
+                ? error.message
+                : "No purchasable products are available for this store right now. Please try again shortly."}
+            </p>
           </Callout>
         )}
 
