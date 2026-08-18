@@ -29,16 +29,11 @@ seeds the food catalog whenever it starts.
 3. Select the `BenYang12/Macro-Max` repository.
 4. Render detects the root `render.yaml`. Approve the `macro-max-api` free web
    service.
-5. Enter the requested environment variables:
+5. Enter the one requested environment variable:
 
 | Variable | Value |
 |---|---|
 | `DATABASE_URL` | Neon pooled connection string |
-| `WEB_APP_URL` | Expected Vercel origin, such as `https://macro-max.vercel.app` |
-| `KROGER_CLIENT_ID` | Optional; leave blank initially |
-| `KROGER_CLIENT_SECRET` | Optional; leave blank initially |
-| `FDC_API_KEY` | Optional |
-| `ANTHROPIC_API_KEY` | Optional and not free |
 
 6. Create the Blueprint and wait for the deploy to become **Live**.
 7. Copy the service URL, such as `https://macro-max-api.onrender.com`.
@@ -62,8 +57,6 @@ NEXT_PUBLIC_ANTHROPIC_RECIPES=false
 ```
 
 5. Deploy and copy the final `https://YOUR-PROJECT.vercel.app` origin.
-6. If that origin differs from `WEB_APP_URL` on Render, update the Render value
-   and redeploy the backend.
 
 ## 4. Optional Kroger integration
 
@@ -73,8 +66,9 @@ In the Kroger developer portal, register this exact callback:
 https://YOUR-PROJECT.vercel.app/api/kroger/callback
 ```
 
-Enable `product.compact` and `cart.basic:write`, then set the two Kroger secrets
-on Render. Change `NEXT_PUBLIC_KROGER_CART` to `true` on Vercel and redeploy.
+Enable `product.compact` and `cart.basic:write`, then add `KROGER_CLIENT_ID`,
+`KROGER_CLIENT_SECRET`, and `WEB_APP_URL` (the Vercel origin) on Render. Change
+`NEXT_PUBLIC_KROGER_CART` to `true` on Vercel and redeploy both services.
 
 For scheduled price updates, add these GitHub Actions secrets:
 

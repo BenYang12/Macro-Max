@@ -10,15 +10,5 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
-      - key: WEB_APP_URL
-        sync: false
       - key: REDIS_URL
         value: disabled
-      - key: KROGER_CLIENT_ID
-        sync: false
-      - key: KROGER_CLIENT_SECRET
-        sync: false
-      - key: FDC_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
