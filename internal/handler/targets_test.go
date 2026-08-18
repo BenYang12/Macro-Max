@@ -169,6 +169,24 @@ func TestTargetsCreate_ZeroBudgetReturns422(t *testing.T) {
 	}
 }
 
+func TestTargetsCreate_RejectsPathologicalInputSizes(t *testing.T) {
+	tests := []string{
+		`{"label":"` + strings.Repeat("x", 101) + `","protein_g_daily":1,"carbs_g_daily":1,"fat_g_daily":1,"budget_cents_weekly":1}`,
+		`{"label":"x","protein_g_daily":1001,"carbs_g_daily":1,"fat_g_daily":1,"budget_cents_weekly":1}`,
+		`{"label":"x","protein_g_daily":1,"carbs_g_daily":1,"fat_g_daily":1,"calories_max_daily":10001,"budget_cents_weekly":1}`,
+		`{"label":"x","protein_g_daily":1,"carbs_g_daily":1,"fat_g_daily":1,"budget_cents_weekly":1000001}`,
+		`{"label":"x","protein_g_daily":1,"carbs_g_daily":1,"fat_g_daily":1,"budget_cents_weekly":1,"diet_tags":[""]}`,
+		`{"label":"x","protein_g_daily":1,"carbs_g_daily":1,"fat_g_daily":1,"budget_cents_weekly":1,"exclude_food_ids":[0]}`,
+		`{"label":"x","protein_g_daily":1,"carbs_g_daily":1,"fat_g_daily":1,"budget_cents_weekly":1,"diet_tags":[` + strings.Repeat(`"x",`, 20) + `"x"]}`,
+		`{"label":"x","protein_g_daily":1,"carbs_g_daily":1,"fat_g_daily":1,"budget_cents_weekly":1,"exclude_food_ids":[` + strings.Repeat(`1,`, 500) + `1]}`,
+	}
+	for _, body := range tests {
+		if rr := postTarget(t, NewTargetsHandler(&fakeTargetStore{}), body); rr.Code != http.StatusUnprocessableEntity {
+			t.Errorf("status = %d; want 422 for %s", rr.Code, body)
+		}
+	}
+}
+
 // The cross-field rule: a calorie ceiling below the macros it must contain.
 // 180*4 + 200*4 + 60*9 = 2060 kcal, so a 1000 kcal cap is self-contradictory.
 func TestTargetsCreate_CalorieCapBelowMacrosReturns422(t *testing.T) {

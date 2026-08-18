@@ -3,8 +3,10 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds the application settings used at startup.
@@ -17,6 +19,8 @@ type Config struct {
 	KrogerClientID     string
 	KrogerClientSecret string
 	AnthropicAPIKey    string
+	RecipeAccessKey    string
+	TrustedProxyCIDRs  []netip.Prefix
 	// WebAppURL is intentionally required with Kroger credentials. It has no
 	// code fallback so a production deployment cannot redirect OAuth to localhost.
 	WebAppURL string
@@ -47,7 +51,22 @@ func LoadFromEnv() (Config, error) {
 		KrogerClientID:     os.Getenv("KROGER_CLIENT_ID"),
 		KrogerClientSecret: os.Getenv("KROGER_CLIENT_SECRET"),
 		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
+		RecipeAccessKey:    os.Getenv("RECIPE_ACCESS_KEY"),
 		WebAppURL:          os.Getenv("WEB_APP_URL"),
+	}
+	if cfg.AnthropicAPIKey != "" && cfg.RecipeAccessKey == "" {
+		return Config{}, fmt.Errorf("RECIPE_ACCESS_KEY is required when ANTHROPIC_API_KEY is configured")
+	}
+	for _, raw := range strings.Split(os.Getenv("TRUSTED_PROXY_CIDRS"), ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid TRUSTED_PROXY_CIDRS entry %q: %w", raw, err)
+		}
+		cfg.TrustedProxyCIDRs = append(cfg.TrustedProxyCIDRs, prefix)
 	}
 	if cfg.KrogerClientID != "" && cfg.KrogerClientSecret != "" && cfg.WebAppURL == "" {
 		return Config{}, fmt.Errorf("WEB_APP_URL is required when Kroger cart credentials are configured")

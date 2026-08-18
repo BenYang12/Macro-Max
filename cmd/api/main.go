@@ -112,6 +112,8 @@ func main() {
 		Cache:              cache,
 		Kroger:             kr,
 		Recipes:            rc,
+		RecipeAccessKey:    cfg.RecipeAccessKey,
+		TrustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
 		KrogerClientSecret: cfg.KrogerClientSecret,
 		WebAppURL:          cfg.WebAppURL,
 	})

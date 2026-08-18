@@ -71,6 +71,15 @@ remove the ownership boundary protecting persisted targets.
 The free service sleeps after inactivity. The first request after sleep can be
 slow because it wakes the API, solver, and database.
 
+To enable paid recipe generation, set both `ANTHROPIC_API_KEY` and a long,
+random `RECIPE_ACCESS_KEY` on the backend. Only a trusted server-side caller
+may send `RECIPE_ACCESS_KEY` as `X-Recipe-Key`; do not expose it through a
+`NEXT_PUBLIC_*` variable or an anonymous browser bundle. Leave the browser
+recipe flag disabled in the deployment below. If the host publishes its proxy
+network ranges, they may be configured as comma-separated
+`TRUSTED_PROXY_CIDRS`; otherwise leave it unset so forwarding headers are not
+trusted.
+
 ## 3. Deploy the frontend on Vercel
 
 1. Sign in at <https://vercel.com> with GitHub and import this repository.

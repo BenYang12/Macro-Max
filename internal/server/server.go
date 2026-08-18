@@ -1,7 +1,9 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/BenYang12/Macro-Max/internal/handler"
@@ -21,7 +23,9 @@ type Deps struct {
 	Cache  *solver.Cache
 	Kroger *kroger.Client
 
-	Recipes *recipes.Client
+	Recipes           *recipes.Client
+	RecipeAccessKey   string
+	TrustedProxyCIDRs []netip.Prefix
 
 	KrogerClientSecret string
 	WebAppURL          string
@@ -29,6 +33,9 @@ type Deps struct {
 
 // New wires routes without starting the listener.
 func New(d Deps) (*http.Server, error) {
+	if d.Recipes != nil && d.RecipeAccessKey == "" {
+		return nil, fmt.Errorf("recipe access key is required when recipes are enabled")
+	}
 	// multiplexer = router
 	// looks at incoming request's method + path -> decides WHICH handler function should run
 	mux := http.NewServeMux()
@@ -79,7 +86,7 @@ func New(d Deps) (*http.Server, error) {
 	// layer: the LLM is a finishing touch, and the solver — the actual
 	// product — has to work without it.
 	if d.Recipes != nil {
-		rec := handler.NewRecipesHandler(d.Store, d.Recipes)
+		rec := handler.NewRecipesHandler(d.Store, d.Recipes, d.RecipeAccessKey)
 		mux.HandleFunc("POST /v1/recipes", rec.Generate)
 	}
 
@@ -95,7 +102,7 @@ func New(d Deps) (*http.Server, error) {
 
 	return &http.Server{
 		Addr:    d.Addr,
-		Handler: mux,
+		Handler: newRateLimiter(d.TrustedProxyCIDRs).middleware(mux),
 		// WriteTimeout is generous because of /v1/recipes: an LLM call with a
 		// long structured response genuinely takes tens of seconds, and the old
 		// 10s would have severed the connection mid-generation — after paying

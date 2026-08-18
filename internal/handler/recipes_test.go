@@ -59,9 +59,35 @@ func postRecipes(t *testing.T, h *RecipesHandler, body string) *httptest.Respons
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/recipes", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+testCapabilityToken)
+	req.Header.Set("X-Recipe-Key", "test-recipe-key")
 	rr := httptest.NewRecorder()
 	h.Generate(rr, req)
 	return rr
+}
+
+func TestRecipes_RequiresDeploymentAccessKey(t *testing.T) {
+	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{plan: recipePlanFake()}, "correct-key")
+	for _, tc := range []struct {
+		name, key string
+		want      int
+	}{
+		{"missing", "", http.StatusUnauthorized},
+		{"wrong", "wrong-key", http.StatusUnauthorized},
+		{"correct", "correct-key", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/recipes", strings.NewReader(`{"target_id":7}`))
+			req.Header.Set("Authorization", "Bearer "+testCapabilityToken)
+			if tc.key != "" {
+				req.Header.Set("X-Recipe-Key", tc.key)
+			}
+			rr := httptest.NewRecorder()
+			h.Generate(rr, req)
+			if rr.Code != tc.want {
+				t.Fatalf("status = %d; want %d", rr.Code, tc.want)
+			}
+		})
+	}
 }
 
 func TestRecipes_RejectsMissingMalformedAndWrongCapabilities(t *testing.T) {
@@ -74,11 +100,12 @@ func TestRecipes_RejectsMissingMalformedAndWrongCapabilities(t *testing.T) {
 				st.targetErr = store.ErrNotFound
 			}
 			req := httptest.NewRequest(http.MethodPost, "/v1/recipes", strings.NewReader(`{"target_id":7}`))
+			req.Header.Set("X-Recipe-Key", "test-recipe-key")
 			if tc.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tc.token)
 			}
 			rr := httptest.NewRecorder()
-			NewRecipesHandler(st, &fakeGenerator{}).Generate(rr, req)
+			NewRecipesHandler(st, &fakeGenerator{}, "test-recipe-key").Generate(rr, req)
 			if rr.Code != http.StatusNotFound {
 				t.Fatalf("status = %d; want 404", rr.Code)
 			}
@@ -118,7 +145,7 @@ func recipePlanFake() recipes.Plan {
 
 func TestRecipes_AggregatesGramsByFood(t *testing.T) {
 	gen := &fakeGenerator{plan: recipePlanFake()}
-	h := NewRecipesHandler(recipeStoreFake(), gen)
+	h := NewRecipesHandler(recipeStoreFake(), gen, "test-recipe-key")
 
 	rr := postRecipes(t, h, `{"target_id": 7}`)
 	if string(h.Store.(*fakeRecipeStore).gotDigest) != string(testCapabilityDigest()) {
@@ -154,7 +181,7 @@ func TestRecipes_AggregatesGramsByFood(t *testing.T) {
 
 func TestRecipes_PassesTargetsAndDietTags(t *testing.T) {
 	gen := &fakeGenerator{plan: recipePlanFake()}
-	h := NewRecipesHandler(recipeStoreFake(), gen)
+	h := NewRecipesHandler(recipeStoreFake(), gen, "test-recipe-key")
 
 	postRecipes(t, h, `{"target_id": 7}`)
 
@@ -167,7 +194,7 @@ func TestRecipes_PassesTargetsAndDietTags(t *testing.T) {
 }
 
 func TestRecipes_ReturnsThePlan(t *testing.T) {
-	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{plan: recipePlanFake()})
+	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{plan: recipePlanFake()}, "test-recipe-key")
 
 	rr := postRecipes(t, h, `{"target_id": 7}`)
 
@@ -183,7 +210,7 @@ func TestRecipes_ReturnsThePlan(t *testing.T) {
 }
 
 func TestRecipes_MissingTargetIDIs422(t *testing.T) {
-	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{plan: recipePlanFake()})
+	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{plan: recipePlanFake()}, "test-recipe-key")
 
 	rr := postRecipes(t, h, `{}`)
 	if rr.Code != http.StatusUnprocessableEntity {
@@ -192,7 +219,7 @@ func TestRecipes_MissingTargetIDIs422(t *testing.T) {
 }
 
 func TestRecipes_UnknownFieldIs400(t *testing.T) {
-	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{plan: recipePlanFake()})
+	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{plan: recipePlanFake()}, "test-recipe-key")
 
 	// DisallowUnknownFields is on globally, and this asserts the recipes route
 	// inherits it. 400, not 422: the body itself is unreadable, not merely wrong.
@@ -205,7 +232,7 @@ func TestRecipes_UnknownFieldIs400(t *testing.T) {
 func TestRecipes_UnknownTargetIs404(t *testing.T) {
 	st := recipeStoreFake()
 	st.targetErr = store.ErrNotFound
-	h := NewRecipesHandler(st, &fakeGenerator{plan: recipePlanFake()})
+	h := NewRecipesHandler(st, &fakeGenerator{plan: recipePlanFake()}, "test-recipe-key")
 
 	rr := postRecipes(t, h, `{"target_id": 999}`)
 	if rr.Code != http.StatusNotFound {
@@ -216,7 +243,7 @@ func TestRecipes_UnknownTargetIs404(t *testing.T) {
 func TestRecipes_UnsolvedTargetIs422NotFoundish(t *testing.T) {
 	st := recipeStoreFake()
 	st.basketErr = store.ErrNotFound
-	h := NewRecipesHandler(st, &fakeGenerator{plan: recipePlanFake()})
+	h := NewRecipesHandler(st, &fakeGenerator{plan: recipePlanFake()}, "test-recipe-key")
 
 	rr := postRecipes(t, h, `{"target_id": 7}`)
 
@@ -232,7 +259,7 @@ func TestRecipes_UnsolvedTargetIs422NotFoundish(t *testing.T) {
 }
 
 func TestRecipes_RefusalIs422NotServerError(t *testing.T) {
-	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{err: recipes.ErrRefused})
+	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{err: recipes.ErrRefused}, "test-recipe-key")
 
 	rr := postRecipes(t, h, `{"target_id": 7}`)
 
@@ -248,7 +275,7 @@ func TestRecipes_RefusalIs422NotServerError(t *testing.T) {
 }
 
 func TestRecipes_GeneratorFailureIs500(t *testing.T) {
-	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{err: errors.New("connection reset")})
+	h := NewRecipesHandler(recipeStoreFake(), &fakeGenerator{err: errors.New("connection reset")}, "test-recipe-key")
 
 	rr := postRecipes(t, h, `{"target_id": 7}`)
 	if rr.Code != http.StatusInternalServerError {

@@ -14,7 +14,7 @@
 # `AS builder` names this stage so the second one can copy from it.
 # The Go version is pinned to match go.mod. "latest" would mean a toolchain
 # upgrade could break my build on a commit that changed nothing.
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.6-alpine AS builder
 
 WORKDIR /src
 

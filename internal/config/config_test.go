@@ -21,6 +21,9 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	t.Setenv("KROGER_CLIENT_ID", "")
 	t.Setenv("KROGER_CLIENT_SECRET", "")
 	t.Setenv("WEB_APP_URL", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("RECIPE_ACCESS_KEY", "")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -91,6 +94,30 @@ func TestLoadFromEnvRequiresWebAppURLForKrogerCart(t *testing.T) {
 	t.Setenv("WEB_APP_URL", "")
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("expected missing WEB_APP_URL to fail when Kroger credentials are configured")
+	}
+}
+
+func TestLoadFromEnvRequiresRecipeAccessKey(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+	t.Setenv("RECIPE_ACCESS_KEY", "")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected missing RECIPE_ACCESS_KEY to fail")
+	}
+}
+
+func TestLoadFromEnvParsesTrustedProxyCIDRs(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 2001:db8::/32")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("got %d proxy CIDRs", len(cfg.TrustedProxyCIDRs))
+	}
+	t.Setenv("TRUSTED_PROXY_CIDRS", "not-a-cidr")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected invalid proxy CIDR to fail")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/BenYang12/Macro-Max/internal/store"
 )
@@ -39,6 +40,16 @@ type createTargetRequest struct {
 	DietTags       []string `json:"diet_tags"`        // slices are already nil-able
 	ExcludeFoodIDs []int64  `json:"exclude_food_ids"` // so no pointer needed
 }
+
+const (
+	maxLabelRunes        = 100
+	maxMacroGramsDaily   = 1000
+	maxCaloriesDaily     = 10000
+	maxBudgetCentsWeekly = 1_000_000
+	maxDietTags          = 20
+	maxDietTagRunes      = 50
+	maxExcludedFoods     = 500
+)
 
 // Create handles POST /v1/targets
 func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +82,8 @@ func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// Present but empty is a DIFFERENT mistake than absent, and saying so
 		// helps whoever is debugging the client.
 		fields["label"] = "must not be empty"
+	} else if utf8.RuneCountInString(*req.Label) > maxLabelRunes {
+		fields["label"] = "must be 100 characters or fewer"
 	}
 
 	// The three macros share identical rules, so a tiny local closure keeps
@@ -80,6 +93,8 @@ func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			fields[name] = "must be provided"
 		} else if *v < 0 {
 			fields[name] = "must not be negative"
+		} else if *v > maxMacroGramsDaily {
+			fields[name] = "must be 1000 or less"
 		}
 	}
 	requireNonNegative("protein_g_daily", req.ProteinGDaily)
@@ -92,11 +107,35 @@ func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		fields["budget_cents_weekly"] = "must be provided"
 	} else if *req.BudgetCentsWeekly <= 0 {
 		fields["budget_cents_weekly"] = "must be greater than zero"
+	} else if *req.BudgetCentsWeekly > maxBudgetCentsWeekly {
+		fields["budget_cents_weekly"] = "must be 1000000 or less"
 	}
 
 	// Optional field: nil is fine (no ceiling). Only validate if PRESENT.
 	if req.CaloriesMaxDaily != nil && *req.CaloriesMaxDaily <= 0 {
 		fields["calories_max_daily"] = "must be greater than zero when provided"
+	} else if req.CaloriesMaxDaily != nil && *req.CaloriesMaxDaily > maxCaloriesDaily {
+		fields["calories_max_daily"] = "must be 10000 or less"
+	}
+	if len(req.DietTags) > maxDietTags {
+		fields["diet_tags"] = "must contain 20 items or fewer"
+	} else {
+		for _, tag := range req.DietTags {
+			if tag == "" || utf8.RuneCountInString(tag) > maxDietTagRunes {
+				fields["diet_tags"] = "items must be non-empty and 50 characters or fewer"
+				break
+			}
+		}
+	}
+	if len(req.ExcludeFoodIDs) > maxExcludedFoods {
+		fields["exclude_food_ids"] = "must contain 500 items or fewer"
+	} else {
+		for _, id := range req.ExcludeFoodIDs {
+			if id <= 0 {
+				fields["exclude_food_ids"] = "items must be positive IDs"
+				break
+			}
+		}
 	}
 
 	// A cross-field check — the kind of rule a database CHECK constraint
@@ -105,8 +144,8 @@ func (h *TargetsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// for the macros the user asked for (Atwater: 4/4/9 kcal per gram).
 	if req.CaloriesMaxDaily != nil &&
 		req.ProteinGDaily != nil && req.CarbsGDaily != nil && req.FatGDaily != nil {
-		macroKcal := 4**req.ProteinGDaily + 4**req.CarbsGDaily + 9**req.FatGDaily
-		if *req.CaloriesMaxDaily < macroKcal {
+		macroKcal := int64(4)*int64(*req.ProteinGDaily) + int64(4)*int64(*req.CarbsGDaily) + int64(9)*int64(*req.FatGDaily)
+		if int64(*req.CaloriesMaxDaily) < macroKcal {
 			fields["calories_max_daily"] = fmt.Sprintf(
 				"is below the %d kcal implied by the macro targets", macroKcal)
 		}

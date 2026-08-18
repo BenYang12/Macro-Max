@@ -16,6 +16,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"net/http"
 
@@ -39,12 +41,14 @@ type RecipeGenerator interface {
 }
 
 type RecipesHandler struct {
-	Store     RecipeStore
-	Generator RecipeGenerator
+	Store               RecipeStore
+	Generator           RecipeGenerator
+	accessKeyDigest     [sha256.Size]byte
+	accessKeyConfigured bool
 }
 
-func NewRecipesHandler(s RecipeStore, g RecipeGenerator) *RecipesHandler {
-	return &RecipesHandler{Store: s, Generator: g}
+func NewRecipesHandler(s RecipeStore, g RecipeGenerator, accessKey string) *RecipesHandler {
+	return &RecipesHandler{Store: s, Generator: g, accessKeyDigest: sha256.Sum256([]byte(accessKey)), accessKeyConfigured: accessKey != ""}
 }
 
 // recipesRequest is the POST body. Pointer for the same present-vs-absent
@@ -56,6 +60,11 @@ type recipesRequest struct {
 
 // Generate handles POST /v1/recipes.
 func (h *RecipesHandler) Generate(w http.ResponseWriter, r *http.Request) {
+	provided := sha256.Sum256([]byte(r.Header.Get("X-Recipe-Key")))
+	if !h.accessKeyConfigured || subtle.ConstantTimeCompare(provided[:], h.accessKeyDigest[:]) != 1 {
+		http.Error(w, "recipe access key required", http.StatusUnauthorized)
+		return
+	}
 	var req recipesRequest
 	if err := readJSON(w, r, &req); err != nil {
 		badRequestResponse(w, err)

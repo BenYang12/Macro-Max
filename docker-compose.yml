@@ -21,7 +21,7 @@ services:
     # Port mapping (host:container) -> inside container Postgres listens on 5432
     # mapping publishes it on my Mac's localhost:5432
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
     #First-boot environment variables
     environment:
@@ -45,7 +45,7 @@ services:
   redis:
     image: redis:7-alpine # (name: tag)
     ports:
-      - "6379:6379" #port mapping
+      - "127.0.0.1:6379:6379" #port mapping
     # No volume: Redis is a CACHE for us. Losing it costs a few re-computed
     # solves, nothing more — and an empty Redis after restart is a good test
     # that nothing incorrectly treats the cache as durable storage.
@@ -69,7 +69,7 @@ services:
       # Compose — can reach it at localhost:50051. Once the API is containerized
       # in Phase 7 this mapping becomes unnecessary and the two talk over the
       # Compose network directly.
-      - "50051:50051"
+      - "127.0.0.1:50051:50051"
     healthcheck:
       # There is no curl in a slim Python image and gRPC doesn't speak plain
       # HTTP anyway, so I check the thing that actually matters: is something

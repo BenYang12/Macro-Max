@@ -2,6 +2,8 @@ module github.com/BenYang12/Macro-Max
 
 go 1.26
 
+toolchain go1.26.6
+
 require (
 	github.com/anthropics/anthropic-sdk-go v1.61.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -29,6 +31,6 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
