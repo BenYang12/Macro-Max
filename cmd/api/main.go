@@ -73,11 +73,13 @@ func main() {
 			log.Printf("warning: solve cache unavailable (%v); every solve will be computed", err)
 			cache = nil
 		} else {
-			defer func() { _ = cache.Close() }()
 			pingCtx, cancelPing := context.WithTimeout(ctx, 2*time.Second)
 			if err := cache.Ping(pingCtx); err != nil {
 				log.Printf("warning: redis ping failed (%v); solves will not be cached", err)
+				_ = cache.Close()
+				cache = nil
 			} else {
+				defer func() { _ = cache.Close() }()
 				log.Printf("solve cache connected to %s", cfg.RedisURL)
 			}
 			cancelPing()

@@ -193,6 +193,27 @@ def test_category_coverage_forces_vegetables_and_fruit():
     assert len(cats.get("fruit", ())) >= 1, f"want 1 fruit, got {cats}"
 
 
+@pytest.mark.parametrize("vegetable_count", [0, 1])
+def test_missing_or_undersized_category_is_infeasible(vegetable_count):
+    foods = [
+        food(1, food_id=1, category="protein", protein=0.25,
+             price_cents=100, pack_grams=1000),
+    ]
+    foods.extend(
+        food(10 + i, food_id=10 + i, category="vegetable", carbs=0.05,
+             price_cents=100, pack_grams=1000)
+        for i in range(vegetable_count)
+    )
+
+    resp = milp.solve(milp_request(
+        foods, protein=100, min_vegetables=2,
+        min_portion_grams=100, budget=100_000,
+    ))
+
+    assert resp.status == solver_pb2.SOLVE_STATUS_INFEASIBLE
+    assert f"only {vegetable_count} vegetable food(s) available, 2 required" in resp.message
+
+
 def test_per_food_calorie_share_is_capped():
     """Constraint 6. No single food may dominate the basket's energy.
 

@@ -8,7 +8,54 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestWithIngestLock_SerializesSameStore(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	secondStarted := make(chan struct{})
+	secondEntered := make(chan struct{})
+	secondDone := make(chan error, 1)
+
+	go func() {
+		firstDone <- st.WithIngestLock(ctx, "__LOCK_TEST_STORE__", func() error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	<-firstEntered
+	go func() {
+		close(secondStarted)
+		secondDone <- st.WithIngestLock(ctx, "__LOCK_TEST_STORE__", func() error {
+			close(secondEntered)
+			return nil
+		})
+	}()
+	<-secondStarted
+
+	select {
+	case <-secondEntered:
+		t.Fatal("second ingest entered while the first held the store lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	select {
+	case <-secondEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second ingest did not enter after the first released the lock")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+}
 
 func ingestFixture(t *testing.T, st *Store, foodID int64, price, promo int64) IngestProduct {
 	t.Helper()

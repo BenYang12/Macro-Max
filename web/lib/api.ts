@@ -38,6 +38,11 @@ export interface UserTarget {
   created_at: string;
 }
 
+export interface FoodSummary {
+  name: string;
+  protein_g_per_100g: number;
+}
+
 // Validation and infeasibility have distinct payloads under HTTP 422.
 
 export interface ValidationError {
@@ -91,15 +96,8 @@ export interface TargetInput {
   diet_tags: string[];
 }
 
-async function post<T>(path: string, body: unknown, capabilityToken?: string): Promise<T> {
-	const res = await fetch(`/api${path}`, {
-    method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			...(capabilityToken ? { Authorization: `Bearer ${capabilityToken}` } : {}),
-		},
-    body: JSON.stringify(body),
-  });
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+	const res = await fetch(`/api${path}`, init);
 
   if (!res.ok) {
     let parsed: ApiErrorBody;
@@ -117,6 +115,22 @@ async function post<T>(path: string, body: unknown, capabilityToken?: string): P
   }
 
   return (await res.json()) as T;
+}
+
+async function post<T>(path: string, body: unknown, capabilityToken?: string): Promise<T> {
+	return request<T>(path, {
+    method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			...(capabilityToken ? { Authorization: `Bearer ${capabilityToken}` } : {}),
+		},
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listFoods(): Promise<FoodSummary[]> {
+  const { foods } = await request<{ foods: FoodSummary[] }>("/foods");
+  return foods;
 }
 
 /** Save targets and return their database identifier. */

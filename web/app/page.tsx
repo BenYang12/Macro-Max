@@ -12,6 +12,7 @@ import {
   generateRecipes,
   isInfeasible,
   isValidationError,
+  listFoods,
   solveForTarget,
   type ApiErrorBody,
   type Basket,
@@ -82,6 +83,7 @@ export default function Home() {
   const [error, setError] = useState<ApiErrorBody | null>(null);
   const [solvedFor, setSolvedFor] = useState<{ p: number; c: number; f: number; kcal: number | null } | null>(null);
   const [proteinByFood, setProteinByFood] = useState<Record<string, number>>({});
+	const [foodMetadataError, setFoodMetadataError] = useState(false);
 	const [targetId, setTargetId] = useState<number | null>(null);
 	const [capabilityToken, setCapabilityToken] = useState<string | null>(null);
 
@@ -95,15 +97,13 @@ export default function Home() {
   const resultsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("/api/foods")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { foods?: { name: string; protein_g_per_100g: number }[] } | null) => {
-        if (!data?.foods) return;
+    listFoods()
+      .then((foods) => {
         const map: Record<string, number> = {};
-        for (const f of data.foods) map[f.name] = f.protein_g_per_100g;
+        for (const f of foods) map[f.name] = f.protein_g_per_100g;
         setProteinByFood(map);
       })
-      .catch(() => {});
+      .catch(() => setFoodMetadataError(true));
   }, []);
 
   const set = (key: keyof FormState) => (value: string) =>
@@ -474,6 +474,11 @@ export default function Home() {
 
             <section className="result-section flex flex-col gap-3">
               <h2 className="text-2xl font-semibold">Shopping list</h2>
+              {foodMetadataError && (
+                <Callout tone="warn" title="Nutrition details unavailable">
+                  <p>Cost per gram of protein could not be loaded. Basket quantities and prices are unaffected.</p>
+                </Callout>
+              )}
               <BasketTable items={basket.items} proteinByFood={proteinByFood} />
             </section>
 

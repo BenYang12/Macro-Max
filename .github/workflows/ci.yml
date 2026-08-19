@@ -46,6 +46,8 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          API_URL: http://localhost:4000
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium

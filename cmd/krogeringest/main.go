@@ -365,6 +365,16 @@ func normalizeUnitForSchema(u string) string {
 
 func writeResults(ctx context.Context, st *store.Store, locationID string,
 	results []foodResult, dryRun bool) error {
+	if dryRun {
+		return writeResultsUnlocked(ctx, st, locationID, results, true)
+	}
+	return st.WithIngestLock(ctx, locationID, func() error {
+		return writeResultsUnlocked(ctx, st, locationID, results, false)
+	})
+}
+
+func writeResultsUnlocked(ctx context.Context, st *store.Store, locationID string,
+	results []foodResult, dryRun bool) error {
 
 	var (
 		totalFound, totalSkipped, inserted, updated, priceChanges int

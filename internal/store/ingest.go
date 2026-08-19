@@ -15,9 +15,12 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
+
+const ingestLockCleanupTimeout = 5 * time.Second
 
 // IngestProduct is one product as the ingester found it. Deliberately a
 // separate type from store.Product: this is INPUT (no id yet, no timestamps),
@@ -44,6 +47,44 @@ type IngestResult struct {
 	PriceChanged  bool
 	OldPriceCents int64
 	NewPriceCents int64
+}
+
+// WithIngestLock serializes complete ingestion runs for one store. The idle
+// transaction owns a transaction-scoped advisory lock while the callback's
+// ordinary pool queries use other connections. Consequently the pool needs at
+// least two connections: one for the lock and one for callback work.
+func (s *Store) WithIngestLock(ctx context.Context, storeID string, fn func() error) (err error) {
+	if s.Pool.Config().MaxConns < 2 {
+		return fmt.Errorf("ingest locking requires a database pool with at least 2 connections")
+	}
+
+	conn, err := s.Pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring ingest lock connection: %w", err)
+	}
+	defer conn.Release()
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning ingest lock transaction: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), ingestLockCleanupTimeout)
+		defer cancel()
+		_ = tx.Rollback(cleanupCtx)
+	}()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, storeID); err != nil {
+		return fmt.Errorf("locking ingest for store %q: %w", storeID, err)
+	}
+
+	if err := fn(); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing ingest lock transaction for store %q: %w", storeID, err)
+	}
+	return nil
 }
 
 // UpsertProduct writes one product and records a price change if there was one.

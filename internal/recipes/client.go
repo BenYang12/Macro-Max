@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -285,8 +286,13 @@ func parsePlan(raw string) (Plan, error) {
 	}
 
 	var plan Plan
-	if err := json.Unmarshal([]byte(s), &plan); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(s))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&plan); err != nil {
 		return Plan{}, fmt.Errorf("model returned unparseable JSON: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return Plan{}, errors.New("model returned more than one JSON value")
 	}
 
 	// An empty meals array parses fine and is useless. Catching it here means
@@ -296,6 +302,62 @@ func parsePlan(raw string) (Plan, error) {
 	if len(plan.Meals) == 0 {
 		return Plan{}, errors.New("model returned no meals")
 	}
+	if len(plan.Meals) > 20 {
+		return Plan{}, errors.New("model returned more than 20 meals")
+	}
+	if len(plan.Notes) > 50 {
+		return Plan{}, errors.New("model returned more than 50 notes")
+	}
+	for i, meal := range plan.Meals {
+		if err := validateMeal(meal); err != nil {
+			return Plan{}, fmt.Errorf("model returned invalid meal %d: %w", i+1, err)
+		}
+	}
+	for i, note := range plan.Notes {
+		if err := validateText(note, 500); err != nil {
+			return Plan{}, fmt.Errorf("model returned invalid note %d: %w", i+1, err)
+		}
+	}
 
 	return plan, nil
+}
+
+func validateMeal(meal Meal) error {
+	if err := validateText(meal.Name, 200); err != nil {
+		return fmt.Errorf("name: %w", err)
+	}
+	if meal.Servings <= 0 || meal.Servings > 100 {
+		return errors.New("servings must be between 1 and 100")
+	}
+	if meal.PrepMinutes < 0 || meal.PrepMinutes > 24*60 {
+		return errors.New("prep_minutes must be between 0 and 1440")
+	}
+	if len(meal.Ingredients) == 0 || len(meal.Ingredients) > 50 {
+		return errors.New("ingredients must contain between 1 and 50 items")
+	}
+	if len(meal.Steps) == 0 || len(meal.Steps) > 50 {
+		return errors.New("steps must contain between 1 and 50 items")
+	}
+	for i, ingredient := range meal.Ingredients {
+		if err := validateText(ingredient, 500); err != nil {
+			return fmt.Errorf("ingredient %d: %w", i+1, err)
+		}
+	}
+	for i, step := range meal.Steps {
+		if err := validateText(step, 1000); err != nil {
+			return fmt.Errorf("step %d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+func validateText(value string, maxLength int) error {
+	length := len([]rune(strings.TrimSpace(value)))
+	if length == 0 {
+		return errors.New("must not be empty")
+	}
+	if length > maxLength {
+		return fmt.Errorf("must be at most %d characters", maxLength)
+	}
+	return nil
 }

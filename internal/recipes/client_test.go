@@ -39,9 +39,9 @@ func TestParsePlan_StripsMarkdownFences(t *testing.T) {
 	//
 	// Both fence styles, because ``` and ```json are equally common.
 	for _, raw := range []string{
-		"```json\n{\"meals\":[{\"name\":\"Dal\"}]}\n```",
-		"```\n{\"meals\":[{\"name\":\"Dal\"}]}\n```",
-		"  ```json\n{\"meals\":[{\"name\":\"Dal\"}]}\n```  ",
+		"```json\n{\"meals\":[{\"name\":\"Dal\",\"servings\":4,\"prep_minutes\":30,\"ingredients\":[\"lentils\"],\"steps\":[\"cook\"]}]}\n```",
+		"```\n{\"meals\":[{\"name\":\"Dal\",\"servings\":4,\"prep_minutes\":30,\"ingredients\":[\"lentils\"],\"steps\":[\"cook\"]}]}\n```",
+		"  ```json\n{\"meals\":[{\"name\":\"Dal\",\"servings\":4,\"prep_minutes\":30,\"ingredients\":[\"lentils\"],\"steps\":[\"cook\"]}]}\n```  ",
 	} {
 		plan, err := parsePlan(raw)
 		if err != nil {
@@ -50,6 +50,42 @@ func TestParsePlan_StripsMarkdownFences(t *testing.T) {
 		if len(plan.Meals) != 1 || plan.Meals[0].Name != "Dal" {
 			t.Errorf("parsing %q gave %+v", raw, plan.Meals)
 		}
+	}
+}
+
+func TestParsePlan_RejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
+	validMeal := `{"meals":[{"name":"Dal","servings":4,"prep_minutes":30,"ingredients":["lentils"],"steps":["cook"]}]}`
+	for _, raw := range []string{
+		`{"meals":[{"name":"Dal","servings":4,"prep_minutes":30,"ingredients":["lentils"],"steps":["cook"],"surprise":true}]}`,
+		validMeal + ` {}`,
+	} {
+		if _, err := parsePlan(raw); err == nil {
+			t.Fatalf("expected strict parsing error for %q", raw)
+		}
+	}
+}
+
+func TestParsePlan_RejectsInvalidStructure(t *testing.T) {
+	for _, raw := range []string{
+		`{"meals":[{"name":"","servings":4,"prep_minutes":30,"ingredients":["lentils"],"steps":["cook"]}]}`,
+		`{"meals":[{"name":"Dal","servings":0,"prep_minutes":30,"ingredients":["lentils"],"steps":["cook"]}]}`,
+		`{"meals":[{"name":"Dal","servings":4,"prep_minutes":-1,"ingredients":["lentils"],"steps":["cook"]}]}`,
+		`{"meals":[{"name":"Dal","servings":4,"prep_minutes":30,"ingredients":[],"steps":["cook"]}]}`,
+		`{"meals":[{"name":"Dal","servings":4,"prep_minutes":30,"ingredients":["lentils"],"steps":[]}]}`,
+	} {
+		if _, err := parsePlan(raw); err == nil {
+			t.Fatalf("expected validation error for %q", raw)
+		}
+	}
+}
+
+func TestParsePlan_AllowsZeroPrepMinutes(t *testing.T) {
+	plan, err := parsePlan(`{"meals":[{"name":"Fruit plate","servings":1,"prep_minutes":0,"ingredients":["fruit"],"steps":["serve"]}]}`)
+	if err != nil {
+		t.Fatalf("parse zero-minute meal: %v", err)
+	}
+	if got := plan.Meals[0].PrepMinutes; got != 0 {
+		t.Fatalf("prep minutes = %d, want 0", got)
 	}
 }
 

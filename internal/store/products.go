@@ -92,6 +92,9 @@ func (s *Store) ListProducts(ctx context.Context, filter ProductFilter) ([]Produ
 		}
 		products = append(products, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating product rows: %w", err)
+	}
 	return products, nil
 }
 

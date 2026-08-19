@@ -167,10 +167,11 @@ def _build_model(solver, request, foods, opts):
         if n <= 0:
             return
         members = [used[fid] for fid in groups if category_of(fid) == category]
-        if not members:
-            # Asking for 2 vegetables when the catalog has none is infeasible by
-            # construction, and adding the constraint anyway would produce a
-            # baffling "no solution" rather than the diagnosis in _diagnose.
+        if len(members) < n:
+            # An empty constraint with a positive lower bound makes the model
+            # explicitly infeasible. Silently omitting it would let a catalog
+            # shortage masquerade as a valid solution.
+            solver.Constraint(n, solver.infinity(), f"required_{category}")
             return
         solver.Add(solver.Sum(members) >= n)
 
@@ -400,8 +401,10 @@ def _resolve_relaxed(request, foods, opts, *, drop_budget=False, drop_variety=Fa
             if n <= 0:
                 return
             members = [used[fid] for fid in groups if foods[groups[fid][0]].category == cat]
-            if members:
-                solver.Add(solver.Sum(members) >= n)
+            if len(members) < n:
+                solver.Constraint(n, solver.infinity(), f"required_{cat}")
+                return
+            solver.Add(solver.Sum(members) >= n)
 
         require("protein", opts["min_protein_sources"])
         require("vegetable", opts["min_vegetables"])
