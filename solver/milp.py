@@ -270,8 +270,9 @@ def _build_response(request, foods, model, status, elapsed):
         else solver_pb2.SOLVE_STATUS_FEASIBLE
     )
 
-    distinct_foods = len({f.food_id for f, it in zip(foods, range(len(foods)))
-                          if packs[it].solution_value() >= 0.5})
+    distinct_foods = len(
+        {f.food_id for i, f in enumerate(foods) if packs[i].solution_value() >= 0.5}
+    )
 
     return solver_pb2.SolveResponse(
         status=proto_status,
@@ -304,7 +305,32 @@ def _build_response(request, foods, model, status, elapsed):
 
 
 def _diagnose(request, foods, opts, elapsed):
-    without_budget = _resolve_relaxed(request, foods, opts, drop_budget=True)
+    # The diagnosis shares ONE time budget across its stages instead of giving
+    # each stage a fresh time_limit_seconds.
+    #
+    # Why that matters: the Go client sets a fixed gRPC deadline (milpTimeout in
+    # internal/solver/client.go). Three independent solves at the full limit
+    # could spend 3x the limit, blow that deadline, and turn the single most
+    # useful answer this file produces — "your macros need at least N cents" —
+    # into a bare 500. A diagnosis that arrives after the caller has given up is
+    # worth exactly nothing, so the stages race one shared clock and the total
+    # solve stays bounded by roughly 2x the limit.
+    budget = opts["time_limit_seconds"]
+    started = time.monotonic()
+
+    def remaining():
+        # Leave a floor: a solve with near-zero time returns NOT_SOLVED, which
+        # is indistinguishable from "infeasible" here and would misreport the
+        # cause. Below the floor, stop and fall through to the honest answer.
+        left = budget - (time.monotonic() - started)
+        return left if left >= 0.5 else None
+
+    stage_limit = remaining()
+    without_budget = (
+        _resolve_relaxed(request, foods, opts, stage_limit, drop_budget=True)
+        if stage_limit
+        else None
+    )
     if without_budget is not None:
         # The macros AND the variety rules are satisfiable — I just can't afford
         # them. This is the actionable answer, and the most common one.
@@ -319,7 +345,14 @@ def _diagnose(request, foods, opts, elapsed):
             solve_seconds=elapsed,
         )
 
-    without_variety = _resolve_relaxed(request, foods, opts, drop_budget=True, drop_variety=True)
+    stage_limit = remaining()
+    without_variety = (
+        _resolve_relaxed(
+            request, foods, opts, stage_limit, drop_budget=True, drop_variety=True
+        )
+        if stage_limit
+        else None
+    )
     if without_variety is not None:
         # Dropping variety made it solvable, so variety is the binding
         # constraint. Naming the specific shortage is what turns this from a
@@ -347,17 +380,23 @@ def _diagnose(request, foods, opts, elapsed):
     )
 
 
-def _resolve_relaxed(request, foods, opts, *, drop_budget=False, drop_variety=False):
+def _resolve_relaxed(
+    request, foods, opts, time_limit_seconds, *, drop_budget=False, drop_variety=False
+):
     """Re-solve with some constraints removed. Returns min cost in cents, or None.
 
     I deliberately rebuild the model from scratch rather than mutating the
     original. pywraplp has no clean way to remove a constraint, and a
     half-modified model is a much worse bug than a few extra milliseconds.
+
+    time_limit_seconds is passed in rather than read from opts because the
+    caller is rationing one shared budget across the diagnosis stages; see
+    _diagnose.
     """
     solver = pywraplp.Solver.CreateSolver("SCIP")
     if solver is None:
         return None
-    solver.SetTimeLimit(int(opts["time_limit_seconds"] * 1000))
+    solver.SetTimeLimit(int(time_limit_seconds * 1000))
 
     groups = _group_by_food(foods)
     kcal_ceiling = calorie_ceiling(request.targets)

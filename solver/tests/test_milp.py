@@ -431,3 +431,44 @@ def test_the_stigler_basket_is_gone():
     assert resp.total_cost_cents <= 15_000
     for it in resp.items:
         assert it.packs == int(it.packs)
+
+
+# ------------------------------------------------------- diagnosis time budget
+
+
+def test_infeasible_diagnosis_shares_one_time_budget(monkeypatch):
+    """The staged diagnosis must not spend time_limit_seconds three times over.
+
+    The Go client sets a fixed gRPC deadline. When each stage got its own full
+    limit, a slow infeasible solve could take ~3x that limit, exceed the
+    deadline, and turn the diagnosis into a bare 500 — losing precisely the
+    answer the staging exists to produce.
+
+    Rather than time a real solve (flaky on shared CI hardware), this records
+    the limit handed to every relaxed re-solve and asserts the total rationed
+    across them never exceeds the single budget.
+    """
+    handed_out = []
+    original = milp._resolve_relaxed
+
+    def spy(request, foods, opts, time_limit_seconds, **kw):
+        handed_out.append(time_limit_seconds)
+        return original(request, foods, opts, time_limit_seconds, **kw)
+
+    monkeypatch.setattr(milp, "_resolve_relaxed", spy)
+
+    # A budget far below any achievable cost: infeasible, so every stage runs.
+    req = milp_request(
+        [food(1, category="protein", protein=0.3, kcal=1.5, pack_grams=1000, price_cents=5000)],
+        protein=700,
+        budget=1,
+    )
+    resp = milp.solve(req)
+
+    assert resp.status == solver_pb2.SOLVE_STATUS_INFEASIBLE
+    assert handed_out, "the diagnosis should have attempted at least one stage"
+
+    budget = req.options.time_limit_seconds
+    assert max(handed_out) <= budget, "no stage may exceed the whole budget"
+    for limit in handed_out:
+        assert limit > 0, "a stage must never be given a non-positive limit"
