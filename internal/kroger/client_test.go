@@ -8,6 +8,7 @@ package kroger
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -310,5 +311,34 @@ func TestRateLimiter_PacesRequests(t *testing.T) {
 
 	if elapsed < 50*time.Millisecond {
 		t.Errorf("3 calls took %v; want >= 50ms with a 25ms gap", elapsed)
+	}
+}
+
+// A cancelled context must abort BEFORE the request goes out, and must surface
+// as cancellation rather than as a transport error. The ingester cancels its
+// errgroup context on the first failure, so this is the ordinary shutdown path
+// for every worker still queued behind the rate limiter.
+func TestSearchProducts_CancelledContextSkipsTheRequest(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer srv.Close()
+
+	c := New("id", "secret")
+	c.BaseURL = srv.URL
+	c.tokens.tokenURL = srv.URL + "/token"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.SearchProducts(ctx, "chicken", "09700117", 5)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v; want context.Canceled", err)
+	}
+	if hits != 0 {
+		t.Errorf("made %d request(s) on a cancelled context; want 0", hits)
 	}
 }

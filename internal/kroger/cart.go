@@ -178,7 +178,9 @@ func (c *Client) AddToCart(ctx context.Context, accessToken string, items []Cart
 	// Rate limiting applies here too. It's one request rather than 42, but the
 	// limiter is on the client and skipping it for "just this one" is how a
 	// consistent invariant becomes an inconsistent one.
-	c.waitForSlot(ctx)
+	if err := c.waitForSlot(ctx); err != nil {
+		return err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
 		c.BaseURL+"/cart/add", strings.NewReader(string(body)))

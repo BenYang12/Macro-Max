@@ -130,7 +130,9 @@ func (c *Client) SearchProducts(ctx context.Context, term, locationID string, li
 
 // get is the shared plumbing: rate limit, attach a token, send, check, decode.
 func (c *Client) get(ctx context.Context, path string, params url.Values, dst any) error {
-	c.waitForSlot(ctx)
+	if err := c.waitForSlot(ctx); err != nil {
+		return err
+	}
 
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
@@ -187,7 +189,13 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, dst an
 // The mutex matters because the worker pool calls this from several goroutines,
 // and without it two workers could both read the same lastCall and both decide
 // they're clear to go.
-func (c *Client) waitForSlot(ctx context.Context) {
+// It returns ctx.Err() when the wait was cut short by cancellation. Returning
+// it matters: this used to wake up and report success, so the caller built and
+// sent a request on a dead context and surfaced the cancellation as
+// "requesting /products: context canceled" — a transport-shaped error for what
+// is really an orderly shutdown. The ingester cancels its errgroup context on
+// the first failure, so that was the normal path out, not an edge case.
+func (c *Client) waitForSlot(ctx context.Context) error {
 	c.limiterMu.Lock()
 	wait := time.Until(c.lastCall.Add(c.minGap))
 	// Claim my slot BEFORE sleeping, so a second goroutine computes its wait
@@ -197,7 +205,9 @@ func (c *Client) waitForSlot(ctx context.Context) {
 	c.limiterMu.Unlock()
 
 	if wait <= 0 {
-		return
+		// Still honour an already-cancelled context: no slot is worth
+		// starting a request the caller has abandoned.
+		return ctx.Err()
 	}
 	// select over a timer and ctx.Done so a cancelled run stops promptly
 	// instead of finishing its nap first.
@@ -205,7 +215,9 @@ func (c *Client) waitForSlot(ctx context.Context) {
 	defer timer.Stop()
 	select {
 	case <-timer.C:
+		return nil
 	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

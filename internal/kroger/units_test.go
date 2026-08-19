@@ -250,3 +250,67 @@ func TestParseSize_FractionsAreHandled(t *testing.T) {
 		t.Errorf("got %.1f g; want ~1892.7 (half a gallon of water)", g)
 	}
 }
+
+// AsFluidOunces had no coverage at all, despite deciding the pack_size_qty and
+// pack_size_unit written for every liquid product in the catalog.
+func TestAsFluidOunces(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		want      float64
+		ok        bool
+	}{
+		{"fluid ounces pass through", "16 fl oz", 16, true},
+		{"spelled-out fluid ounce", "12 fluid ounce", 12, true},
+		{"a litre is 33.8 fl oz", "1 l", 33.814, true},
+		{"a quart is exactly 32 fl oz", "1 qt", 32, true},
+		{"millilitres convert", "500 ml", 16.907, true},
+		// The context rule: for a food already known to be a liquid, a bare
+		// "oz" on the label means FLUID ounces.
+		{"bare oz is fluid in a liquid context", "32 oz", 32, true},
+		// A pure mass string has no volume unit to find, so the caller keeps
+		// its mass reading rather than getting a silently wrong number.
+		{"grams are not fluid ounces", "500 g", 0, false},
+		{"a count is not fluid ounces", "12 ct", 0, false},
+		{"garbage", "family size", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := AsFluidOunces(tc.raw)
+			if ok != tc.ok {
+				t.Fatalf("AsFluidOunces(%q) ok = %v; want %v", tc.raw, ok, tc.ok)
+			}
+			if ok && math.Abs(got-tc.want) > 0.01 {
+				t.Errorf("AsFluidOunces(%q) = %v; want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// The "oz" ambiguity, pinned from both sides. The SAME string must yield a
+// mass reading through the general path and a fluid reading through the
+// liquid-only path — because the FOOD decides which, never the string. If
+// these two ever agree, one of the two tables has been "helpfully" corrected
+// and a whole category of products silently changed weight.
+func TestOunceIsMassByDefaultAndFluidOnlyForKnownLiquids(t *testing.T) {
+	const label = "32 oz"
+
+	mass, err := NetWeightGrams(label, 0)
+	if err != nil {
+		t.Fatalf("NetWeightGrams(%q): %v", label, err)
+	}
+	if math.Abs(mass-907.18) > 0.01 {
+		t.Errorf("mass reading = %v g; want 907.18 g (32 avoirdupois ounces)", mass)
+	}
+
+	// Water, so grams and millilitres coincide and the number is checkable.
+	fluid, err := VolumeGrams(label, 1.0)
+	if err != nil {
+		t.Fatalf("VolumeGrams(%q): %v", label, err)
+	}
+	if math.Abs(fluid-946.35) > 0.01 {
+		t.Errorf("fluid reading = %v g; want 946.35 g (32 US fluid ounces of water)", fluid)
+	}
+
+	if math.Abs(mass-fluid) < 1 {
+		t.Fatal("mass and fluid readings collapsed; the context distinction is gone")
+	}
+}
