@@ -21,8 +21,14 @@ type Config struct {
 	AnthropicAPIKey    string
 	RecipeAccessKey    string
 	TrustedProxyCIDRs  []netip.Prefix
-	// WebAppURL is intentionally required with Kroger credentials. It has no
-	// code fallback so a production deployment cannot redirect OAuth to localhost.
+	// WebAppURL is the browser origin the Kroger OAuth callback redirects to.
+	// It has no code fallback, so a production deployment cannot silently
+	// redirect OAuth to localhost. The requirement is enforced where it
+	// applies — handler.NewCartHandler, reached via server.New — rather than
+	// here, because loading config is not the same thing as serving the cart
+	// routes. cmd/krogeringest also needs Kroger credentials and never serves
+	// an OAuth callback; enforcing the pair here made every scheduled price
+	// refresh exit before its first request.
 	WebAppURL string
 }
 
@@ -68,10 +74,6 @@ func LoadFromEnv() (Config, error) {
 		}
 		cfg.TrustedProxyCIDRs = append(cfg.TrustedProxyCIDRs, prefix)
 	}
-	if cfg.KrogerClientID != "" && cfg.KrogerClientSecret != "" && cfg.WebAppURL == "" {
-		return Config{}, fmt.Errorf("WEB_APP_URL is required when Kroger cart credentials are configured")
-	}
-
 	port, err := strconv.Atoi(cfg.Port)
 	if err != nil || port < 1 || port > 65535 {
 		return Config{}, fmt.Errorf("invalid PORT %q: must be a number between 1 and 65535", cfg.Port)

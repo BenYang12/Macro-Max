@@ -55,7 +55,7 @@ make web
 
 Open <http://localhost:3000>. The UI always solves against the University Place catalog; there is no store picker or synthetic product catalog.
 
-`WEB_APP_URL` is intentionally required whenever Kroger credentials are set. The API has no localhost fallback, preventing a production OAuth flow from silently redirecting to a developer machine.
+`WEB_APP_URL` is required by the API server whenever it registers the Kroger cart routes, and it has no localhost fallback — a production OAuth flow cannot silently redirect to a developer machine. Command-line tools that use Kroger credentials without serving a callback, such as `make kroger-ingest`, do not need it.
 
 ## Kroger cart flow
 

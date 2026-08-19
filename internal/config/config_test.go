@@ -88,12 +88,25 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvRequiresWebAppURLForKrogerCart(t *testing.T) {
+// The scheduled price refresh (.github/workflows/kroger-ingest.yml) supplies
+// Kroger credentials and a database URL but no WEB_APP_URL, because it never
+// serves an OAuth callback. Config once rejected that combination, so every
+// run of cmd/krogeringest exited before its first request. Loading must
+// succeed here; the cart routes enforce WEB_APP_URL themselves, which
+// TestNewRequiresWebAppURLWhenKrogerConfigured in internal/server covers.
+func TestLoadFromEnvAllowsKrogerWithoutWebAppURL(t *testing.T) {
 	t.Setenv("KROGER_CLIENT_ID", "client")
 	t.Setenv("KROGER_CLIENT_SECRET", "secret")
 	t.Setenv("WEB_APP_URL", "")
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("expected missing WEB_APP_URL to fail when Kroger credentials are configured")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("ingest-style environment must load, got error: %v", err)
+	}
+	if cfg.KrogerClientID != "client" || cfg.KrogerClientSecret != "secret" {
+		t.Fatalf("Kroger credentials not loaded: %+v", cfg)
+	}
+	if cfg.WebAppURL != "" {
+		t.Errorf("WebAppURL: want empty, got %q", cfg.WebAppURL)
 	}
 }
 
