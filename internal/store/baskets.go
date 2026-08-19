@@ -139,36 +139,11 @@ func (s *Store) LatestBasketForTarget(ctx context.Context, targetID int64) (Bask
 		return Basket{}, nil, fmt.Errorf("querying latest basket: %w", err)
 	}
 
-	// Two JOINs, one query. basket_items -> products gives me the store's
-	// external id and the product's name; products -> foods gives me the food
-	// name. Doing this as three separate round trips per line is the N+1
-	// problem the solve handler already avoids, and the same reasoning applies.
-	//
-	// ORDER BY cost DESC puts the expensive lines first, which is the order a
-	// person actually cares about when reading a basket.
-	rows, err := s.Pool.Query(ctx, `
-		SELECT bi.product_id, p.external_id, p.name, f.name,
-		       bi.packs, bi.grams, bi.cost_cents
-		FROM basket_items bi
-		JOIN products p ON p.id = bi.product_id
-		JOIN foods    f ON f.id = p.food_id
-		WHERE bi.basket_id = $1
-		ORDER BY bi.cost_cents DESC`, b.ID)
+	lines, err := s.loadBasketLines(ctx, b.ID)
 	if err != nil {
-		return Basket{}, nil, fmt.Errorf("querying basket lines: %w", err)
+		return Basket{}, nil, err
 	}
-	defer rows.Close()
-
-	lines := []BasketLine{}
-	for rows.Next() {
-		var l BasketLine
-		if err := rows.Scan(&l.ProductID, &l.ExternalID, &l.ProductName, &l.FoodName,
-			&l.Packs, &l.Grams, &l.CostCents); err != nil {
-			return Basket{}, nil, fmt.Errorf("scanning basket line: %w", err)
-		}
-		lines = append(lines, l)
-	}
-	return b, lines, rows.Err()
+	return b, lines, nil
 }
 
 // BasketByIDForTarget loads the exact solved basket bound into a cart OAuth
@@ -187,6 +162,17 @@ func (s *Store) BasketByIDForTarget(ctx context.Context, basketID, targetID int6
 		}
 		return Basket{}, nil, fmt.Errorf("querying basket by id: %w", err)
 	}
+	lines, err := s.loadBasketLines(ctx, b.ID)
+	if err != nil {
+		return Basket{}, nil, err
+	}
+	return b, lines, nil
+}
+
+func (s *Store) loadBasketLines(ctx context.Context, basketID int64) ([]BasketLine, error) {
+	// Two JOINs avoid an N+1 query while retaining the product and food names
+	// needed by recipe generation and cart integration. Expensive lines come
+	// first because that is the most useful order when reviewing a basket.
 	rows, err := s.Pool.Query(ctx, `
 		SELECT bi.product_id, p.external_id, p.name, f.name,
 		       bi.packs, bi.grams, bi.cost_cents
@@ -194,19 +180,23 @@ func (s *Store) BasketByIDForTarget(ctx context.Context, basketID, targetID int6
 		JOIN products p ON p.id = bi.product_id
 		JOIN foods f ON f.id = p.food_id
 		WHERE bi.basket_id = $1
-		ORDER BY bi.cost_cents DESC`, b.ID)
+		ORDER BY bi.cost_cents DESC`, basketID)
 	if err != nil {
-		return Basket{}, nil, fmt.Errorf("querying basket lines by id: %w", err)
+		return nil, fmt.Errorf("querying basket lines: %w", err)
 	}
 	defer rows.Close()
+
 	lines := []BasketLine{}
 	for rows.Next() {
 		var line BasketLine
 		if err := rows.Scan(&line.ProductID, &line.ExternalID, &line.ProductName, &line.FoodName,
 			&line.Packs, &line.Grams, &line.CostCents); err != nil {
-			return Basket{}, nil, fmt.Errorf("scanning basket line by id: %w", err)
+			return nil, fmt.Errorf("scanning basket line: %w", err)
 		}
 		lines = append(lines, line)
 	}
-	return b, lines, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating basket lines: %w", err)
+	}
+	return lines, nil
 }
