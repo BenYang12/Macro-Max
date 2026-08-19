@@ -86,6 +86,17 @@ func TestRecipes_RequiresDeploymentAccessKey(t *testing.T) {
 			if rr.Code != tc.want {
 				t.Fatalf("status = %d; want %d", rr.Code, tc.want)
 			}
+			// The rejection must use the same JSON envelope as every other
+			// error on this API. It replied in plain text once, which any
+			// client narrowing on error.code reads as an unreachable server.
+			if tc.want == http.StatusUnauthorized {
+				if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+					t.Errorf("Content-Type = %q; want application/json", ct)
+				}
+				if !strings.Contains(rr.Body.String(), `"code": "unauthorized"`) {
+					t.Errorf("body should carry the error envelope, got %s", rr.Body.String())
+				}
+			}
 		})
 	}
 }

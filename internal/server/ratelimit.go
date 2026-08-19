@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/BenYang12/Macro-Max/internal/handler"
 )
 
 type rateLimit struct {
@@ -53,7 +55,8 @@ func (l *rateLimiter) middleware(next http.Handler) http.Handler {
 		if !allowed {
 			seconds := int64((retryAfter + time.Second - 1) / time.Second)
 			w.Header().Set("Retry-After", strconv.FormatInt(max(seconds, 1), 10))
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			handler.ErrorResponse(w, http.StatusTooManyRequests, "rate_limited",
+				"too many requests; retry after the interval in the Retry-After header")
 			return
 		}
 		next.ServeHTTP(w, r)

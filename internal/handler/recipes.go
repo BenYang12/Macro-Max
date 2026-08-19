@@ -62,7 +62,8 @@ type recipesRequest struct {
 func (h *RecipesHandler) Generate(w http.ResponseWriter, r *http.Request) {
 	provided := sha256.Sum256([]byte(r.Header.Get("X-Recipe-Key")))
 	if !h.accessKeyConfigured || subtle.ConstantTimeCompare(provided[:], h.accessKeyDigest[:]) != 1 {
-		http.Error(w, "recipe access key required", http.StatusUnauthorized)
+		errorResponse(w, http.StatusUnauthorized, "unauthorized",
+			"a valid recipe access key is required")
 		return
 	}
 	var req recipesRequest

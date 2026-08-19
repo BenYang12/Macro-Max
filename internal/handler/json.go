@@ -130,6 +130,16 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 // `notFoundResponse(w)` rather than assembling envelopes inline. Consistency
 // for free: every error in the app has the same shape.
 
+// ErrorResponse is errorResponse for callers outside this package — currently
+// only the rate limiter in internal/server, which sits in front of the mux and
+// must reject with the SAME envelope every route uses. Before this existed it
+// replied in plain text, and the browser client (which parses the JSON error
+// body) fell through to its "could not reach the API" branch — telling users
+// the server was down when it was merely rate limiting them.
+func ErrorResponse(w http.ResponseWriter, status int, code, message string) {
+	errorResponse(w, status, code, message)
+}
+
 // errorResponse is the shared builder the specific helpers below delegate to.
 func errorResponse(w http.ResponseWriter, status int, code, message string) {
 	env := envelope{"error": map[string]any{
