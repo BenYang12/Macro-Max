@@ -150,11 +150,15 @@ web-build:      # production build + typecheck, the same thing CI would run
 
 ## Deployment checks
 
-docker-build:   # build the API image exactly as a deploy would.
+docker-build:   # build the image a deploy would ACTUALLY use.
+                # Points at Dockerfile.render because that is what render.yaml
+                # deploys. There used to be a second, near-identical Dockerfile
+                # here that nothing shipped, so these checks were proving the
+                # safety of an image that never left this machine.
                 # Worth running before any deploy: it catches the whole class of
                 # "works on my Mac" failures (missing CA certs, a file excluded
                 # by .dockerignore) on my machine instead of in production.
-	docker build -t macrocart-api:local .
+	docker build -f Dockerfile.render -t macrocart-api:local .
 
 docker-verify:  # prove the built image is safe and complete.
                 # Specifically that .env did NOT get baked into a layer — the
