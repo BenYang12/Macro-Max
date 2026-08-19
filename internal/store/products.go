@@ -23,7 +23,13 @@ import (
 // "unset" would silently mean "no filter" if a real 0 ever appeared.
 // nil isn unambiguous, so I must use a pointer!
 type ProductFilter struct {
-	StoreID string // "" = any store
+	// StoreID is REQUIRED. It once accepted "" as "any store", but the catalog
+	// is fixed to one location: the handler always supplies
+	// UniversityPlaceStoreID and rejects a client-supplied store_id outright,
+	// so no caller could ever reach the unfiltered branch. Keeping it meant a
+	// cross-store query was one empty string away, and the planner paid for an
+	// OR it could never satisfy.
+	StoreID string
 	FoodID  *int64 // nil = any food
 }
 
@@ -42,11 +48,11 @@ func (s *Store) ListProducts(ctx context.Context, filter ProductFilter) ([]Produ
 	// price. This is the project's "effective price" rule, expressed once, in
 	// SQL, so every caller gets the same answer.
 
-	// The filters use both tricks side by side:
-	//   ($1 = '' OR p.store_id = $1)      -- string: empty means "off"
+	// The food filter is still optional:
 	//   ($2::bigint IS NULL OR ...)       -- int: NULL means "off"
 	// The ::bigint cast is required — Postgres can't infer a type for a bare
-	// placeholder compared against nothing but NULL.
+	// placeholder compared against nothing but NULL. The store filter is not
+	// optional; see ProductFilter.StoreID.
 
 	query := `
 		SELECT p.id, p.food_id, p.store_id, p.external_id,
@@ -58,7 +64,7 @@ func (s *Store) ListProducts(ctx context.Context, filter ProductFilter) ([]Produ
 		       f.name AS food_name
 		FROM products p
 		JOIN foods f ON f.id = p.food_id
-		WHERE ($1 = '' OR p.store_id = $1)
+		WHERE p.store_id = $1
 		  AND ($2::bigint IS NULL OR p.food_id = $2)
 		ORDER BY f.name, p.net_weight_g`
 

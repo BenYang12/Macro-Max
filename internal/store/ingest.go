@@ -14,6 +14,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -114,10 +115,10 @@ func (s *Store) UpsertProduct(ctx context.Context, p IngestProduct) (IngestResul
 		p.StoreID, p.ExternalID,
 	).Scan(&existingID, &oldPrice, &oldPromo)
 
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		found = true
-	case pgx.ErrNoRows:
+	case errors.Is(err, pgx.ErrNoRows):
 		found = false
 	default:
 		return res, fmt.Errorf("reading existing product: %w", err)

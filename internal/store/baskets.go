@@ -10,6 +10,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -133,7 +134,7 @@ func (s *Store) LatestBasketForTarget(ctx context.Context, targetID int64) (Bask
 		LIMIT 1`, targetID).Scan(
 		&b.ID, &b.TargetID, &b.StoreID, &b.SolveKey, &b.Status, &b.TotalCostCents, &b.SolverStats)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return Basket{}, nil, ErrNotFound
 		}
 		return Basket{}, nil, fmt.Errorf("querying latest basket: %w", err)
@@ -157,7 +158,7 @@ func (s *Store) BasketByIDForTarget(ctx context.Context, basketID, targetID int6
 		WHERE id = $1 AND target_id = $2 AND status IN ('optimal', 'feasible')`, basketID, targetID).Scan(
 		&b.ID, &b.TargetID, &b.StoreID, &b.SolveKey, &b.Status, &b.TotalCostCents, &b.SolverStats)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return Basket{}, nil, ErrNotFound
 		}
 		return Basket{}, nil, fmt.Errorf("querying basket by id: %w", err)
