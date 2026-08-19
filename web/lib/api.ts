@@ -97,7 +97,7 @@ export interface TargetInput {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(`/api${path}`, init);
+  const res = await fetch(`/api${path}`, init);
 
   if (!res.ok) {
     let parsed: ApiErrorBody;
@@ -118,12 +118,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function post<T>(path: string, body: unknown, capabilityToken?: string): Promise<T> {
-	return request<T>(path, {
+  return request<T>(path, {
     method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			...(capabilityToken ? { Authorization: `Bearer ${capabilityToken}` } : {}),
-		},
+    headers: {
+      "Content-Type": "application/json",
+      ...(capabilityToken ? { Authorization: `Bearer ${capabilityToken}` } : {}),
+    },
     body: JSON.stringify(body),
   });
 }
@@ -135,7 +135,7 @@ export async function listFoods(): Promise<FoodSummary[]> {
 
 /** Save targets and return their database identifier. */
 export async function createTarget(input: TargetInput): Promise<{ target: UserTarget; capabilityToken: string }> {
-	const { target, capability_token } = await post<{ target: UserTarget; capability_token: string }>("/targets", {
+  const { target, capability_token } = await post<{ target: UserTarget; capability_token: string }>("/targets", {
     label: input.label,
     protein_g_daily: input.protein_g_daily,
     carbs_g_daily: input.carbs_g_daily,
@@ -144,14 +144,14 @@ export async function createTarget(input: TargetInput): Promise<{ target: UserTa
     budget_cents_weekly: input.budget_cents_weekly,
     diet_tags: input.diet_tags,
   });
-	return { target, capabilityToken: capability_token };
+  return { target, capabilityToken: capability_token };
 }
 
 /** Run the whole-pack optimizer against a saved target. */
 export async function solve(targetId: number, capabilityToken: string): Promise<Basket> {
   const { basket } = await post<{ basket: Basket }>("/solve", {
     target_id: targetId,
-	}, capabilityToken);
+  }, capabilityToken);
   return basket;
 }
 
@@ -159,14 +159,14 @@ export async function solve(targetId: number, capabilityToken: string): Promise<
 export async function solveForTarget(
   input: TargetInput,
 ): Promise<{ target: UserTarget; basket: Basket; capabilityToken: string }> {
-	const { target, capabilityToken } = await createTarget(input);
-	const basket = await solve(target.id, capabilityToken);
-	return { target, basket, capabilityToken };
+  const { target, capabilityToken } = await createTarget(input);
+  const basket = await solve(target.id, capabilityToken);
+  return { target, basket, capabilityToken };
 }
 
 export async function startKrogerCart(targetId: number, capabilityToken: string): Promise<string> {
   const { authorize_url } = await post<{ authorize_url: string }>("/kroger/authorize", {
     target_id: targetId,
-	}, capabilityToken);
+  }, capabilityToken);
   return authorize_url;
 }

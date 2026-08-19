@@ -54,6 +54,11 @@ jobs:
 
       - name: Run mocked browser UI smoke tests
         run: npm run test:e2e
+        env:
+          # The cart specs self-skip unless the cart UI is built in, so without
+          # this the four Kroger tests reported as "passing" while never
+          # running. Every request they make is mocked; no credentials needed.
+          NEXT_PUBLIC_KROGER_CART: "true"
 
       - name: Upload Playwright artifacts
         if: failure()

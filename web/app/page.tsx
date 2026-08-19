@@ -79,9 +79,9 @@ export default function Home() {
   const [error, setError] = useState<ApiErrorBody | null>(null);
   const [solvedFor, setSolvedFor] = useState<{ p: number; c: number; f: number; kcal: number | null } | null>(null);
   const [proteinByFood, setProteinByFood] = useState<Record<string, number>>({});
-	const [foodMetadataError, setFoodMetadataError] = useState(false);
-	const [targetId, setTargetId] = useState<number | null>(null);
-	const [capabilityToken, setCapabilityToken] = useState<string | null>(null);
+  const [foodMetadataError, setFoodMetadataError] = useState(false);
+  const [targetId, setTargetId] = useState<number | null>(null);
+  const [capabilityToken, setCapabilityToken] = useState<string | null>(null);
 
   const [cartResult, setCartResult] = useState<{ success: boolean; code?: string } | null>(null);
   const [cartLoading, setCartLoading] = useState(false);
@@ -111,7 +111,7 @@ export default function Home() {
       budgetOverrideCents ?? dollarsToCents(form.budget_dollars_weekly);
 
     try {
-		const { target, basket, capabilityToken: newCapabilityToken } = await solveForTarget({
+      const { target, basket, capabilityToken: newCapabilityToken } = await solveForTarget({
         label: "web",
         protein_g_daily: Number(form.protein_g_daily),
         carbs_g_daily: Number(form.carbs_g_daily),
@@ -122,8 +122,8 @@ export default function Home() {
       });
 
       setBasket(basket);
-		setTargetId(target.id);
-		setCapabilityToken(newCapabilityToken);
+      setTargetId(target.id);
+      setCapabilityToken(newCapabilityToken);
       setSolvedFor({
         p: Number(form.protein_g_daily) * 7,
         c: Number(form.carbs_g_daily) * 7,
@@ -154,30 +154,25 @@ export default function Home() {
     }
   }
 
+  // Authorization runs in THIS window, not a popup.
+  //
+  // The API's callback finishes by redirecting to WEB_APP_URL with ?cart=... ,
+  // and the effect below is what turns those parameters into a result banner.
+  // A popup put that redirect in the wrong browsing context: the popup landed
+  // on a second full copy of the app, this window never saw the parameters, and
+  // cartLoading — only ever cleared in the catch — left the button stuck
+  // reading "Opening Kroger…" forever after a SUCCESSFUL cart fill.
+  //
+  // Navigating the top level keeps the round trip in one context, so returning
+  // from Kroger is an ordinary page load that the effect already handles.
   async function runAddToCart() {
-	if (targetId === null || capabilityToken === null) return;
-    // Open synchronously while this function is still handling the click.
-    // Waiting for the API first makes browsers classify window.open as an
-    // unsolicited popup and block it.
-    const popup = window.open(
-      "about:blank",
-      "macro-max-kroger-cart",
-      "popup,width=560,height=760,resizable=yes,scrollbars=yes",
-    );
-    if (popup) popup.opener = null;
+    if (targetId === null || capabilityToken === null) return;
     setCartLoading(true);
     setCartResult(null);
     try {
-		const authorizeURL = await startKrogerCart(targetId, capabilityToken);
-      if (popup) {
-        popup.location.assign(authorizeURL);
-        popup.focus();
-      } else {
-        // Popup blocking should not make the cart action unusable.
-        window.location.assign(authorizeURL);
-      }
+      const authorizeURL = await startKrogerCart(targetId, capabilityToken);
+      window.location.assign(authorizeURL);
     } catch (error) {
-      popup?.close();
       setCartLoading(false);
       setCartResult({
         success: false,

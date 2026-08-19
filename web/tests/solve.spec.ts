@@ -127,17 +127,35 @@ test("keeps the basket visible when cart initiation fails", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "Shopping list" })).toBeVisible();
 });
 
-test("opens Kroger authorization in a popup", async ({ page }) => {
+// Authorization must navigate THIS window. The Kroger callback returns to
+// WEB_APP_URL with ?cart=... , and only the window that owns the app can turn
+// those parameters into a result banner — a popup would strand them in a
+// second copy of the app and leave this window loading forever.
+test("navigates the current window to Kroger authorization", async ({ page }) => {
   test.skip(process.env.NEXT_PUBLIC_KROGER_CART !== "true", "cart UI is disabled by default");
   await mockSolveAPI(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Find the cheapest basket" }).click();
 
-  const popupPromise = page.waitForEvent("popup");
-  await page.getByRole("button", { name: "Add to my Kroger cart" }).click();
-  const popup = await popupPromise;
-  await popup.waitForURL("**/kroger-login");
+  let popped = false;
+  page.on("popup", () => {
+    popped = true;
+  });
 
-  await expect(page.getByRole("heading", { name: "Shopping list" })).toBeVisible();
-  await popup.close();
+  await page.getByRole("button", { name: "Add to my Kroger cart" }).click();
+  await page.waitForURL("**/kroger-login");
+
+  expect(popped).toBe(false);
+});
+
+// The success round trip, end to end in one context: returning from Kroger is
+// an ordinary page load carrying ?cart=success, and the button must recover
+// rather than stay disabled on "Opening Kroger…".
+test("recovers after returning from a successful cart fill", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_KROGER_CART !== "true", "cart UI is disabled by default");
+  await mockSolveAPI(page);
+  await page.goto("/?cart=success");
+  await page.getByRole("button", { name: "Find the cheapest basket" }).click();
+
+  await expect(page.getByRole("button", { name: "Add to my Kroger cart" })).toBeEnabled();
 });
