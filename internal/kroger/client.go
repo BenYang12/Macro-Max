@@ -43,8 +43,8 @@ type Client struct {
 	minGap    time.Duration
 }
 
-// New builds a client. store may be nil (in-memory tokens only).
-func New(clientID, clientSecret string, store TokenStore) *Client {
+// New builds a client with an in-memory token cache.
+func New(clientID, clientSecret string) *Client {
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 
 	return &Client{
@@ -56,7 +56,6 @@ func New(clientID, clientSecret string, store TokenStore) *Client {
 			clientSecret: clientSecret,
 			tokenURL:     defaultTokenURL,
 			http:         httpClient,
-			store:        store,
 		},
 		minGap: time.Second / defaultRequestsPerSecond,
 	}

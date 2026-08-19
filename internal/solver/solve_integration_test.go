@@ -1,6 +1,6 @@
 package solver
 
-// The Phase 3 end-to-end test: real Postgres -> my Go conversion layer -> gRPC
+// End-to-end path: real Postgres -> the Go conversion layer -> gRPC
 // over a real socket -> the Python OR-Tools service -> a basket, back.
 //
 // Every other test in this project fakes at least one boundary. This one fakes
@@ -181,7 +181,7 @@ func TestE2E_ImpossibleBudgetReturnsMinFeasible(t *testing.T) {
 	target.BudgetCentsWeekly = 100 // one dollar a week
 
 	resp, err := cl.Solve(context.Background(), SolveInput{
-		Target: target, Products: products, Foods: foods, IntegerPacks: true,
+		Target: target, Products: products, Foods: foods,
 	})
 	if err != nil {
 		t.Fatalf("solve: %v", err)
@@ -246,7 +246,7 @@ func TestE2E_VeganFilterExcludesAnimalProducts(t *testing.T) {
 	// Vegan protein at these targets is expensive, so give it room.
 	target.BudgetCentsWeekly = 15000
 
-	resp, err := cl.Solve(ctx, SolveInput{Target: target, Products: products, Foods: foods, IntegerPacks: true})
+	resp, err := cl.Solve(ctx, SolveInput{Target: target, Products: products, Foods: foods})
 	if err != nil {
 		t.Fatalf("solve: %v", err)
 	}
@@ -275,10 +275,9 @@ func TestE2E_MILPProducesAnEdibleBasket(t *testing.T) {
 	products, foods := loadCatalog(t, st)
 
 	resp, err := cl.Solve(context.Background(), SolveInput{
-		Target:       milpTarget(),
-		Products:     products,
-		Foods:        foods,
-		IntegerPacks: true, // THE switch
+		Target:   milpTarget(),
+		Products: products,
+		Foods:    foods,
 	})
 	if err != nil {
 		t.Fatalf("solve: %v", err)
@@ -317,7 +316,7 @@ func TestE2E_MILPProducesAnEdibleBasket(t *testing.T) {
 	t.Logf("MILP basket (%d items, %d cents, %.3fs): %v",
 		len(resp.Items), resp.TotalCostCents, resp.SolveSeconds, names)
 
-	// --- The Phase 4 exit criteria, straight from my plan ---
+	// Product variety requirements.
 
 	if n := len(byCategory["protein"]); n < 3 {
 		t.Errorf("protein sources = %d; want >= 3", n)
@@ -339,7 +338,7 @@ func TestE2E_MILPProducesAnEdibleBasket(t *testing.T) {
 		}
 	}
 
-	// Whole packs — the dishonesty Phase 3 had.
+	// All returned pack quantities must be purchasable whole numbers.
 	for _, it := range resp.Items {
 		if it.Packs != float64(int64(it.Packs)) {
 			t.Errorf("%q: %v packs is not a whole number", it.ProductName, it.Packs)
@@ -355,8 +354,8 @@ func TestE2E_MILPProducesAnEdibleBasket(t *testing.T) {
 	}
 }
 
-// The other Phase 4 exit criterion: an impossible budget must come back with a
-// real number, now computed against the FULL model including variety.
+// An impossible budget must include a minimum computed against the full model,
+// including variety.
 func TestE2E_MILPInfeasibleBudgetReportsMinimum(t *testing.T) {
 	st, cl := newE2E(t)
 	products, foods := loadCatalog(t, st)
@@ -365,7 +364,7 @@ func TestE2E_MILPInfeasibleBudgetReportsMinimum(t *testing.T) {
 	target.BudgetCentsWeekly = 500
 
 	resp, err := cl.Solve(context.Background(), SolveInput{
-		Target: target, Products: products, Foods: foods, IntegerPacks: true,
+		Target: target, Products: products, Foods: foods,
 	})
 	if err != nil {
 		t.Fatalf("solve: %v", err)

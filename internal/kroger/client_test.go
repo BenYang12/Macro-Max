@@ -67,7 +67,7 @@ func newTestClient(t *testing.T, f *fakeKroger) *Client {
 	srv := httptest.NewServer(f.handler())
 	t.Cleanup(srv.Close)
 
-	c := New("test-id", "test-secret", nil)
+	c := New("test-id", "test-secret")
 	c.BaseURL = srv.URL
 	c.tokens.tokenURL = srv.URL + "/v1/connect/oauth2/token"
 	c.HTTP = srv.Client()
@@ -90,7 +90,7 @@ func TestToken_UsesBasicAuthHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New("my-id", "my-secret", nil)
+	c := New("my-id", "my-secret")
 	c.tokens.tokenURL = srv.URL
 	c.tokens.http = srv.Client()
 
@@ -184,7 +184,7 @@ func TestToken_BadCredentialsGiveAUsefulError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New("bad", "bad", nil)
+	c := New("bad", "bad")
 	c.tokens.tokenURL = srv.URL
 	c.tokens.http = srv.Client()
 

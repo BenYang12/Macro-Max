@@ -74,8 +74,8 @@ Cart writes are additive. Test with a small basket and do not submit the same ba
 - `FDC_API_KEY` enables USDA nutrition enrichment with `make fdc-dry` and `make fdc-import`.
 - `ANTHROPIC_API_KEY` enables the backend recipe route only when
   `RECIPE_ACCESS_KEY` is also set. Trusted server-side callers must send the
-  latter in `X-Recipe-Key`; never put it in a `NEXT_PUBLIC_*` variable. The
-  browser recipe control is intentionally disabled for anonymous deployments.
+  latter in `X-Recipe-Key`; never put it in a `NEXT_PUBLIC_*` variable. Recipe
+  generation is not exposed by the browser application.
 - `TRUSTED_PROXY_CIDRS` is an optional comma-separated list of reverse-proxy
   networks whose `X-Forwarded-For` headers the API may trust. It defaults to
   trusting none; configure only CIDRs supplied by your hosting provider.

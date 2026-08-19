@@ -9,12 +9,12 @@ import time
 from ortools.linear_solver import pywraplp
 
 # Shared validation, calorie ceiling, and option defaults.
-from lp import (
+from model_common import (
     FALLBACK_MAX_GRAMS_WEEK,
-    _calorie_ceiling,
-    _error_response,
-    _resolve_options,
-    _validate,
+    calorie_ceiling,
+    error_response,
+    resolve_options,
+    validate,
 )
 from solver.v1 import solver_pb2
 
@@ -33,16 +33,16 @@ def solve(request):
     """Solve the whole-pack MILP."""
     started = time.monotonic()
 
-    problem = _validate(request)
+    problem = validate(request)
     if problem:
-        return _error_response(problem)
+        return error_response(problem)
 
-    opts = _resolve_options(request.options)
+    opts = resolve_options(request.options)
     foods = list(request.foods)
 
     solver = pywraplp.Solver.CreateSolver("SCIP")
     if solver is None:
-        return _error_response("could not create SCIP solver (is ortools installed correctly?)")
+        return error_response("could not create SCIP solver (is ortools installed correctly?)")
     solver.SetTimeLimit(int(opts["time_limit_seconds"] * 1000))
 
     model = _build_model(solver, request, foods, opts)
@@ -74,7 +74,7 @@ def _group_by_food(foods):
 def _build_model(solver, request, foods, opts):
     """Declare every variable and constraint. Returns the handles I need later."""
     groups = _group_by_food(foods)
-    kcal_ceiling = _calorie_ceiling(request.targets)
+    kcal_ceiling = calorie_ceiling(request.targets)
 
     # ---- Variables ---------------------------------------------------------
     packs, grams = [], []
@@ -103,18 +103,17 @@ def _build_model(solver, request, foods, opts):
     #
     # I can't eat more of a product than I bought. The SLACK in this inequality
     # is leftovers: buy a 4536g bag, eat 3000g, 1536g sits in the cupboard. That
-    # gap is why the answer is honest — Phase 3 pretended food came in
-    # arbitrarily divisible amounts.
+    # gap represents leftovers from groceries that were bought but not eaten.
     for i, f in enumerate(foods):
         solver.Add(grams[i] <= packs[i] * f.pack_grams)
 
     # ---- Constraint 2: budget, on what I BUY -------------------------------
     # The cost is now driven by integer packs, not by grams eaten. This is the
-    # single most important change from Phase 3: I pay for the whole bag.
+    # Paying for the whole bag keeps purchase cost honest.
     total_cost = solver.Sum(packs[i] * foods[i].pack_price_cents for i in range(len(foods)))
     solver.Add(total_cost <= request.budget_cents)
 
-    # ---- Macro targets and the calorie ceiling (unchanged from the LP) ------
+    # ---- Macro targets and the calorie ceiling ------------------------------
     t = request.targets
     if t.protein_g > 0:
         solver.Add(solver.Sum(foods[i].protein_per_g * grams[i] for i in range(len(foods))) >= t.protein_g)
@@ -244,7 +243,6 @@ def _build_response(request, foods, model, status, elapsed):
 
         # Cost is packs x price: both integers, so this is EXACT. No rounding,
         # no float objective, no violation of the money law. This is strictly
-        # better than Phase 3, where I had to round a fractional pack count.
         cost = n * f.pack_price_cents
         total_cents += cost
 
@@ -362,7 +360,7 @@ def _resolve_relaxed(request, foods, opts, *, drop_budget=False, drop_variety=Fa
     solver.SetTimeLimit(int(opts["time_limit_seconds"] * 1000))
 
     groups = _group_by_food(foods)
-    kcal_ceiling = _calorie_ceiling(request.targets)
+    kcal_ceiling = calorie_ceiling(request.targets)
 
     packs, grams = [], []
     for f in foods:

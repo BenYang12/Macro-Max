@@ -52,21 +52,12 @@ const scopeProductCompact = "product.compact"
 // hour, and the benefit is never serving a request with a stale credential.
 const refreshMargin = 30 * time.Second
 
-// TokenStore is optional persistence for the token across process restarts.
-// An interface rather than a *redis.Client so this package doesn't depend on
-// Redis at all, and so tests can supply a map.
-type TokenStore interface {
-	GetToken(ctx context.Context) (token string, expiresAt time.Time, ok bool)
-	SetToken(ctx context.Context, token string, expiresAt time.Time)
-}
-
 // tokenManager holds the current token and refreshes it on demand.
 type tokenManager struct {
 	clientID     string
 	clientSecret string
 	tokenURL     string
 	http         *http.Client
-	store        TokenStore // may be nil
 
 	// mu guards the two fields below. This is my first real use of a mutex in
 	// this project, and the rule is the one every Go programmer learns: the
@@ -97,18 +88,6 @@ func (t *tokenManager) Token(ctx context.Context) (string, error) {
 
 	if t.token != "" && time.Now().Before(t.expiresAt.Add(-refreshMargin)) {
 		return t.token, nil
-	}
-
-	// Second chance before hitting the network: another PROCESS may have
-	// refreshed recently and left the token in Redis. This is why the store
-	// exists — a CLI that runs every few minutes shouldn't re-authenticate
-	// every single time.
-	if t.store != nil {
-		if tok, exp, ok := t.store.GetToken(ctx); ok &&
-			tok != "" && time.Now().Before(exp.Add(-refreshMargin)) {
-			t.token, t.expiresAt = tok, exp
-			return tok, nil
-		}
 	}
 
 	if err := t.refresh(ctx); err != nil {
@@ -173,8 +152,5 @@ func (t *tokenManager) refresh(ctx context.Context) error {
 	t.token = tr.AccessToken
 	t.expiresAt = time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second)
 
-	if t.store != nil {
-		t.store.SetToken(ctx, t.token, t.expiresAt)
-	}
 	return nil
 }

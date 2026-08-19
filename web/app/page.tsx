@@ -6,10 +6,8 @@ import { BasketTable } from "@/components/BasketTable";
 import { Callout } from "@/components/Callout";
 import { MacroBar } from "@/components/MacroBar";
 import { NumberField } from "@/components/NumberField";
-import { RecipeList } from "@/components/RecipeList";
 import {
   ApiError,
-  generateRecipes,
   isInfeasible,
   isValidationError,
   listFoods,
@@ -17,7 +15,6 @@ import {
   type ApiErrorBody,
   type Basket,
   startKrogerCart,
-  type RecipePlan,
 } from "@/lib/api";
 import { dollars, dollarsToCents, parseOptionalInt } from "@/lib/format";
 
@@ -27,7 +24,6 @@ const DIET_TAGS = [
   { value: "gluten_free", label: "Gluten-free" },
   { value: "dairy_free", label: "Dairy-free" },
 ];
-const RECIPES_ENABLED = process.env.NEXT_PUBLIC_ANTHROPIC_RECIPES === "true";
 const CART_ENABLED = process.env.NEXT_PUBLIC_KROGER_CART === "true";
 const FORM_FIELD_ORDER = [
   "protein_g_daily",
@@ -87,10 +83,6 @@ export default function Home() {
 	const [targetId, setTargetId] = useState<number | null>(null);
 	const [capabilityToken, setCapabilityToken] = useState<string | null>(null);
 
-  const [plan, setPlan] = useState<RecipePlan | null>(null);
-  const [planLoading, setPlanLoading] = useState(false);
-  const [planError, setPlanError] = useState<string | null>(null);
-
   const [cartResult, setCartResult] = useState<{ success: boolean; code?: string } | null>(null);
   const [cartLoading, setCartLoading] = useState(false);
 
@@ -113,8 +105,6 @@ export default function Home() {
     setLoading(true);
     setError(null);
 
-    setPlan(null);
-    setPlanError(null);
     setCartResult(null);
 
     const budgetCents =
@@ -161,25 +151,6 @@ export default function Home() {
       }
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function runRecipes() {
-	if (targetId === null || capabilityToken === null) return;
-    setPlanLoading(true);
-    setPlanError(null);
-    try {
-		setPlan(await generateRecipes(targetId, capabilityToken));
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) {
-        setPlanError("Recipe generation is unavailable right now.");
-      } else if (e instanceof ApiError) {
-        setPlanError(e.body.message);
-      } else {
-        setPlanError("Could not reach the API.");
-      }
-    } finally {
-      setPlanLoading(false);
     }
   }
 
@@ -482,20 +453,10 @@ export default function Home() {
               <BasketTable items={basket.items} proteinByFood={proteinByFood} />
             </section>
 
-            {(RECIPES_ENABLED || CART_ENABLED) && <section className="result-section flex flex-col gap-4">
+            {CART_ENABLED && <section className="result-section flex flex-col gap-4">
               <h2 className="text-2xl font-semibold">Take it with you</h2>
 
               <div className="action-dock flex flex-wrap gap-3">
-                {RECIPES_ENABLED && <button
-                  type="button"
-                  onClick={runRecipes}
-                  disabled={planLoading}
-                  aria-busy={planLoading}
-                  className="secondary-action text-sm"
-                >
-                  {planLoading ? "Writing recipes…" : "Turn this into a week of meals"}
-                </button>}
-
                 {CART_ENABLED && <button
                   type="button"
                   onClick={runAddToCart}
@@ -507,23 +468,6 @@ export default function Home() {
                 </button>}
               </div>
 
-              <div aria-live="polite" className="flex flex-col gap-4">
-                {planError && (
-                  <Callout tone="warn" title="No recipes">
-                    <p>{planError}</p>
-                  </Callout>
-                )}
-
-                {plan && (
-                  <div className="flex flex-col gap-3">
-                    <h3 className="font-semibold">Your week of meals</h3>
-                    <p className="text-sm text-[var(--ink-soft)]">
-                      Recipes are generated suggestions; the basket cost is the optimized result.
-                    </p>
-                    <RecipeList plan={plan} />
-                  </div>
-                )}
-              </div>
             </section>}
           </div>
         )}

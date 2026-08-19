@@ -9,15 +9,11 @@
 [project]
 name = "macrocart-solver"
 version = "0.1.0"
-description = "OR-Tools LP/MILP solver microservice for MacroCart"
+description = "OR-Tools whole-pack optimizer service for MacroCart"
 requires-python = ">=3.11"
 
 dependencies = [
-    # OR-Tools is Google's optimization suite. I use its pywraplp wrapper,
-    # which gives me one Python API over several underlying solver ENGINES:
-    # GLOP for pure linear programs (Phase 3), SCIP for mixed-integer ones
-    # (Phase 4). Same modeling code, different engine — which is why the
-    # Phase 4 upgrade doesn't mean rewriting this service.
+    # OR-Tools provides the SCIP mixed-integer optimization backend.
     "ortools>=9.11",
     # The gRPC runtime and the protobuf runtime my generated stubs import.
     "grpcio>=1.67",
@@ -33,18 +29,15 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-# Without this, `import lp` inside a test fails because pytest doesn't add the
-# project root to sys.path. Go's package system spoiled me here; Python needs
-# to be told.
 # Two entries, and the second one is load-bearing:
-#   "."    so `import lp` finds my own modules
+#   "."    so imports find the solver's own modules
 #   "gen"  because protoc generates imports relative to the PROTO ROOT, not to
 #          wherever I put the output. My proto is proto/solver/v1/solver.proto,
 #          so solver_pb2_grpc.py contains `from solver.v1 import solver_pb2`.
 #          Putting gen/ on the path makes that resolve.
 #
 # I found this the hard way: my tests passed while the container crash-looped,
-# because lp.py only imports solver_pb2 (which has no internal imports) while
+# because model_common.py only imports solver_pb2 (which has no internal imports) while
 # server.py imports solver_pb2_grpc (which does). A test suite that never
 # imports the transport layer can't catch a transport-layer import error.
 pythonpath = [".", "gen"]

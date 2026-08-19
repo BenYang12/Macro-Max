@@ -89,7 +89,7 @@ func main() {
 	// The Kroger client supports cart authorization when credentials exist.
 	var kr *kroger.Client
 	if cfg.KrogerClientID != "" && cfg.KrogerClientSecret != "" {
-		kr = kroger.New(cfg.KrogerClientID, cfg.KrogerClientSecret, nil)
+		kr = kroger.New(cfg.KrogerClientID, cfg.KrogerClientSecret)
 		log.Println("kroger client configured")
 	} else {
 		log.Println("KROGER_CLIENT_ID/SECRET not set; Kroger cart routes will not be registered")

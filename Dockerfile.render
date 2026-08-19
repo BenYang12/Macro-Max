@@ -30,7 +30,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 ENV PATH="/app/solver/.venv/bin:$PATH"
 
 COPY solver/gen/ ./gen/
-COPY solver/lp.py solver/milp.py solver/server.py ./
+COPY solver/model_common.py solver/milp.py solver/server.py ./
 COPY deploy/render_entrypoint.py /app/render_entrypoint.py
 COPY --from=go-builder /out/api /usr/local/bin/api
 COPY --from=go-builder /out/seed /usr/local/bin/seed

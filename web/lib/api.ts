@@ -151,7 +151,6 @@ export async function createTarget(input: TargetInput): Promise<{ target: UserTa
 export async function solve(targetId: number, capabilityToken: string): Promise<Basket> {
   const { basket } = await post<{ basket: Basket }>("/solve", {
     target_id: targetId,
-    integer_packs: true,
 	}, capabilityToken);
   return basket;
 }
@@ -163,28 +162,6 @@ export async function solveForTarget(
 	const { target, capabilityToken } = await createTarget(input);
 	const basket = await solve(target.id, capabilityToken);
 	return { target, basket, capabilityToken };
-}
-
-/** One recipe from POST /v1/recipes. Mirrors recipes.Meal in Go. */
-export interface Meal {
-  name: string;
-  servings: number;
-  ingredients: string[];
-  steps: string[];
-  prep_minutes: number;
-}
-
-export interface RecipePlan {
-  meals: Meal[];
-  notes: string[];
-}
-
-/** Generate optional meal suggestions for a solved target. */
-export async function generateRecipes(targetId: number, capabilityToken: string): Promise<RecipePlan> {
-  const { plan } = await post<{ plan: RecipePlan }>("/recipes", {
-    target_id: targetId,
-	}, capabilityToken);
-  return plan;
 }
 
 export async function startKrogerCart(targetId: number, capabilityToken: string): Promise<string> {

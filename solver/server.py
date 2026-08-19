@@ -1,8 +1,8 @@
 """gRPC server wrapping the pure solver.
 
 This file is deliberately thin. Everything it does is TRANSPORT: accept a
-connection, hand the request to lp.solve(), send the answer back. All the
-optimization lives in lp.py, which knows nothing about gRPC.
+connection, hand the request to milp.solve(), send the answer back. All the
+optimization lives in milp.py, which knows nothing about gRPC.
 
 That split is the same one I made in Go between internal/fdc (pure normalize)
 and its HTTP client, and for the same reason: the hard logic should be testable
@@ -20,7 +20,6 @@ from concurrent import futures
 
 import grpc
 
-import lp
 import milp
 from solver.v1 import solver_pb2, solver_pb2_grpc
 
@@ -55,7 +54,7 @@ class SolverService(solver_pb2_grpc.SolverServiceServicer):
         started = time.monotonic()
         log.info(
             "solve[%s]: %d foods, budget %d cents, targets P%.0f/C%.0f/F%.0f",
-            "MILP" if request.options.integer_packs else "LP",
+            "MILP",
             len(request.foods),
             request.budget_cents,
             request.targets.protein_g,
@@ -64,17 +63,10 @@ class SolverService(solver_pb2_grpc.SolverServiceServicer):
         )
 
         try:
-            # THE PHASE 3 / PHASE 4 SWITCH, and the only place that knows both
-            # models exist. Keeping the dispatch here rather than inside lp.py
-            # avoids a circular import (milp.py reuses lp.py's validation and
-            # ceiling helpers) and keeps each model file focused on its own math.
-            if request.options.integer_packs:
-                response = milp.solve(request)
-            else:
-                response = lp.solve(request)
+            response = milp.solve(request)
         except Exception as exc:  # noqa: BLE001 - deliberate catch-all, see below
             # A bare except is usually bad practice, but this is a SERVER
-            # boundary. If lp.solve() raises something I didn't anticipate, the
+            # boundary. If the optimizer raises something I didn't anticipate, the
             # alternatives are: crash the worker thread and return a generic
             # gRPC UNKNOWN with no context, or catch it here and return a
             # structured ERROR my Go client already knows how to handle. The

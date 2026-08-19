@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -262,7 +263,7 @@ func TestSolve_InfeasibleReturns422WithMinBudget(t *testing.T) {
 func TestSolve_SolverErrorStatusBecomes500(t *testing.T) {
 	sv := &fakeSolver{resp: &solverv1.SolveResponse{
 		Status:  solverv1.SolveStatus_SOLVE_STATUS_ERROR,
-		Message: "GLOP exploded",
+		Message: "optimizer exploded",
 	}}
 	h := NewSolveHandler(okStore(), sv, nil)
 
@@ -323,16 +324,23 @@ func TestSolve_NoCandidatesReturns422(t *testing.T) {
 	}
 }
 
-// The Phase 4 switch has to reach the solver.
-func TestSolve_IntegerPacksFlagReachesTheSolver(t *testing.T) {
-	sv := okSolver()
-	h := NewSolveHandler(okStore(), sv, nil)
-
-	if rr := postSolve(t, h, `{"target_id": 1, "integer_packs": true}`); rr.Code != http.StatusOK {
-		t.Fatalf("status = %d; want 200", rr.Code)
-	}
-	if !sv.got.IntegerPacks {
-		t.Error("integer_packs did not reach the solver")
+func TestSolve_AcceptsButIgnoresLegacyIntegerPacksOption(t *testing.T) {
+	for _, value := range []string{"true", "false"} {
+		t.Run(value, func(t *testing.T) {
+			sv := okSolver()
+			h := NewSolveHandler(okStore(), sv, nil)
+			body := fmt.Sprintf(`{"target_id": 1, "integer_packs": %s}`, value)
+			if rr := postSolve(t, h, body); rr.Code != http.StatusOK {
+				t.Fatalf("status = %d; want 200", rr.Code)
+			}
+			built, err := solver.BuildRequest(sv.got)
+			if err != nil {
+				t.Fatalf("BuildRequest: %v", err)
+			}
+			if !built.Options.IntegerPacks {
+				t.Fatal("legacy option changed the whole-pack solver mode")
+			}
+		})
 	}
 }
 

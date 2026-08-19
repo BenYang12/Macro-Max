@@ -6,11 +6,7 @@ from solver.v1 import solver_pb2 as solver_dot_v1_dot_solver__pb2
 
 
 class SolverServiceStub(object):
-    """SolverService is the only service here. One RPC for now; Phase 4 reuses this
-    exact signature and just flips options.integer_packs to true, which is
-    deliberate — I want the MILP upgrade to be a solver-side change, not a new
-    contract.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
         """Constructor.
@@ -26,11 +22,7 @@ class SolverServiceStub(object):
 
 
 class SolverServiceServicer(object):
-    """SolverService is the only service here. One RPC for now; Phase 4 reuses this
-    exact signature and just flips options.integer_packs to true, which is
-    deliberate — I want the MILP upgrade to be a solver-side change, not a new
-    contract.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def Solve(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -55,11 +47,7 @@ def add_SolverServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class SolverService(object):
-    """SolverService is the only service here. One RPC for now; Phase 4 reuses this
-    exact signature and just flips options.integer_packs to true, which is
-    deliberate — I want the MILP upgrade to be a solver-side change, not a new
-    contract.
-    """
+    """Missing associated documentation comment in .proto file."""
 
     @staticmethod
     def Solve(request,

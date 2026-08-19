@@ -68,7 +68,7 @@ var seedFoods = []seedFood{
 		Kcal: 116, Protein: 25.5, Carbs: 0, Fat: 0.8,
 	},
 	{
-		// The 'dozen' pack unit — one of the non-mass units Phase 5 must parse.
+		// The 'dozen' pack unit exercises non-mass package-size parsing.
 		Name: "Eggs, whole, raw", Category: "protein", Tags: tagsVegGF,
 		Kcal: 143, Protein: 12.6, Carbs: 0.7, Fat: 9.5,
 	},
@@ -77,9 +77,8 @@ var seedFoods = []seedFood{
 		Kcal: 52, Protein: 10.9, Carbs: 0.7, Fat: 0.2,
 	},
 	{
-		// STIGLER PLANT #1: absurdly protein-dense and cheap per gram of
-		// protein. An unconstrained LP will happily buy nothing else.
-		// MaxGrams caps it at 1400 g/week so Phase 4 can tax the monotony.
+		// Protein-dense and cheap per gram; cap weekly use so it cannot dominate
+		// an otherwise varied basket.
 		Name: "Whey Protein Isolate, powder", Category: "protein", Tags: tagsVegGF,
 		Kcal: 370, Protein: 80.0, Carbs: 8.0, Fat: 3.0, MaxGrams: 1400,
 	},
@@ -148,8 +147,7 @@ var seedFoods = []seedFood{
 		Kcal: 884, Protein: 0, Carbs: 0, Fat: 100.0, MaxGrams: 400,
 	},
 	{
-		// STIGLER PLANT #3: the cheapest calories in the entire catalog.
-		// ~0.38 c/g for 9 kcal/g. An unconstrained LP loves this.
+		// The cheapest calories in the catalog, capped to prevent dominance.
 		Name: "Canola Oil", Category: "fat", Tags: tagsVegan,
 		Kcal: 884, Protein: 0, Carbs: 0, Fat: 100.0, MaxGrams: 400,
 	},

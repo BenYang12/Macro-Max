@@ -21,7 +21,7 @@ service SolverService {
 // MacroTargets are WEEKLY totals the basket must satisfy.
 message MacroTargets {
   // Lower bounds: the basket must supply AT LEAST this much. I deliberately
-  // chose >= rather than == because equality constraints make an LP brittle —
+  // chose >= rather than == because equality constraints make optimization brittle —
   // demanding exactly 1120g of protein when foods come in discrete packs can
   // easily be infeasible, and "you got 1135g instead of 1120g" is not a
   // problem any human cares about.
@@ -61,7 +61,7 @@ message Food {
   // Which generic FOOD this product supplies. This one is subtle and important:
   // variety constraints count DISTINCT FOODS, not products. Buying a 2lb bag
   // and a 10lb bag of the same rice is one food, not two. Without this field
-  // the Phase 4 MILP would think it had achieved variety by buying the same
+  // the model would think it had achieved variety by buying the same
   // thing twice, which is exactly the kind of gaming I'm building constraints
   // to prevent.
   int64 food_id = 2;
@@ -93,20 +93,13 @@ message Food {
   string product_name = 12;
 }
 
-// SolveOptions are the knobs. Everything here has a sane zero value so that an
-// empty SolveOptions{} is a valid Phase 3 LP request — I want the simple case
-// to require no configuration.
+// SolveOptions are the knobs. Model-level options use documented defaults when
+// their fields have the protobuf zero value.
 message SolveOptions {
-  // false (the zero value) = Phase 3 behavior: continuous grams, no packs.
-  // true = Phase 4 MILP: integer pack counts.
-  //
-  // This single flag is the entire Phase 3 -> Phase 4 upgrade path from the
-  // client's point of view.
-  bool integer_packs = 1;
+  // Retained for wire compatibility. The service always uses whole packs.
+  bool integer_packs = 1 [deprecated = true];
 
-  // Variety floors. All ignored when integer_packs is false, because they need
-  // the binary "is this food meaningfully used" variables that only the MILP
-  // has. I'm defining them now so the contract doesn't churn in Phase 4.
+  // Variety floors for the whole-pack model.
   int32 min_protein_sources = 2;
   int32 min_vegetables = 3;
   int32 min_fruits = 4;
@@ -174,13 +167,11 @@ enum SolveStatus {
 message BasketItem {
   int64 product_id = 1;
 
-  // How many packs to buy. In Phase 3's LP this is fractional and physically
-  // meaningless (you can't buy 2.4 bags of rice) — that dishonesty is exactly
-  // what Phase 4's integer variables fix, and I'm leaving it visible rather
-  // than rounding it away so the difference is obvious when I get there.
+  // How many packs to buy. Kept as double on the wire for compatibility;
+  // integer-ness is enforced by the model.
   double packs = 2;
 
-  // How many grams to actually EAT. In Phase 4 this can be less than what I
+  // How many grams to actually eat. This can be less than what was
   // bought (packs x pack_grams), and the difference is leftovers.
   double grams = 3;
 
@@ -208,7 +199,7 @@ message SolveResponse {
   string message = 6;
 
   // How long the solve took. I want this in the response, not just in logs,
-  // because it's the number that tells me when Phase 4's model has grown too
+  // because it's the number that tells me when the model has grown too
   // slow to ship.
   double solve_seconds = 7;
 }

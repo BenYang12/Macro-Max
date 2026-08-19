@@ -1,4 +1,4 @@
-"""Tests for the Phase 4 mixed-integer program.
+"""Tests for the whole-pack mixed-integer program.
 
 Every constraint in milp.py gets its own test, because a MILP fails QUIETLY: a
 missing constraint doesn't error, it just returns an answer that's optimal for
@@ -14,11 +14,11 @@ import pytest
 import milp
 from solver.v1 import solver_pb2
 
-from test_lp import food, request  # the same helpers, no reason to duplicate
+from solver_fixtures import food, request
 
 
 def milp_request(foods, **kw):
-    """A request with integer_packs on and every optional rule OFF by default.
+    """A whole-pack request with every optional rule off by default.
 
     Two defaults here are deliberately NOT the production defaults, and I got
     this wrong the first time — nine tests failed at once until I worked out why.
@@ -38,7 +38,6 @@ def milp_request(foods, **kw):
     I cannot ask for "explicitly no tax", only for "almost none".
     """
     opts = {
-        "integer_packs": True,
         "min_protein_sources": kw.pop("min_protein_sources", 0),
         "min_vegetables": kw.pop("min_vegetables", 0),
         "min_fruits": kw.pop("min_fruits", 0),
@@ -52,11 +51,74 @@ def milp_request(foods, **kw):
     return req
 
 
+# --------------------------------------------------------------- validation
+
+
+@pytest.mark.parametrize(
+    ("req", "message"),
+    [
+        (request([], protein=100), "no foods provided"),
+        (request([food(1, protein=0.25)], protein=100, budget=0), "budget_cents must be positive"),
+        (request([food(1, protein=0.25)], protein=-1), "macro targets must not be negative"),
+        (request([food(1, protein=0.25)]), "all macro targets are zero"),
+        (request([food(1, protein=0.25, pack_grams=0)], protein=100), "non-positive pack_grams"),
+        (request([food(1, protein=0.25, price_cents=0)], protein=100), "non-positive pack_price_cents"),
+    ],
+)
+def test_malformed_requests_return_structured_errors(req, message):
+    resp = milp.solve(req)
+    assert resp.status == solver_pb2.SOLVE_STATUS_ERROR
+    assert message in resp.message
+
+
+# ---------------------------------------------------------- shared invariants
+
+
+def test_explicit_calorie_ceiling_is_respected():
+    resp = milp.solve(milp_request(
+        [food(1, protein=0.25, kcal=1.0)], protein=100, calories_max=300,
+    ))
+    assert resp.status == solver_pb2.SOLVE_STATUS_INFEASIBLE
+
+
+def test_calorie_ceiling_is_derived_when_absent():
+    resp = milp.solve(milp_request([food(1, protein=0.25, kcal=1.0)], protein=100))
+    assert resp.status == solver_pb2.SOLVE_STATUS_OPTIMAL
+    assert resp.achieved.calories <= 440 + 1e-6
+
+
+def test_food_gram_cap_is_enforced():
+    resp = milp.solve(milp_request(
+        [food(1, protein=0.25, max_grams=100)], protein=100,
+    ))
+    assert resp.status == solver_pb2.SOLVE_STATUS_INFEASIBLE
+
+
+def test_combined_macros_are_met_and_unused_products_are_filtered():
+    foods = [
+        food(1, category="protein", protein=1.0, price_cents=300),
+        food(2, category="carb", carbs=1.0, price_cents=200),
+        food(3, category="fat", fat=1.0, price_cents=100),
+        food(4, category="protein", protein=1.0, price_cents=900),
+    ]
+    resp = milp.solve(milp_request(
+        foods, protein=100, carbs=100, fat=100, min_portion_grams=1,
+    ))
+    assert resp.status == solver_pb2.SOLVE_STATUS_OPTIMAL
+    assert resp.achieved.protein_g >= 100 - 1e-6
+    assert resp.achieved.carbs_g >= 100 - 1e-6
+    assert resp.achieved.fat_g >= 100 - 1e-6
+    assert 4 not in {item.product_id for item in resp.items}
+    assert [item.cost_cents for item in resp.items] == sorted(
+        (item.cost_cents for item in resp.items), reverse=True
+    )
+
+
 # ------------------------------------------------------- the integer guarantee
 
 
 def test_packs_are_whole_numbers():
-    """The headline fix. Phase 3 returned 0.22 of a whey tub; this must not."""
+    """Every returned quantity represents purchasable whole packs."""
     resp = milp.solve(milp_request([food(1, protein=0.25, pack_grams=1000, price_cents=800)],
                                    protein=1000))
 
@@ -80,7 +142,7 @@ def test_you_cannot_eat_more_than_you_bought():
     """Constraint 1. Grams eaten <= packs bought x pack size.
 
     The pack is 1000g and I need 1500g of food, so the solver must buy TWO packs
-    and leave 500g over. Phase 3 would have bought 1.5.
+    and leave 500g over.
     """
     resp = milp.solve(milp_request([food(1, protein=1.0, pack_grams=1000, price_cents=100)],
                                    protein=1500))
@@ -93,10 +155,7 @@ def test_you_cannot_eat_more_than_you_bought():
 
 
 def test_leftovers_are_real():
-    """The slack in constraint 1 is food I bought and didn't eat.
-
-    This is the honesty Phase 3 lacked: I pay for the whole bag either way.
-    """
+    """The slack in constraint 1 is food I bought and didn't eat."""
     resp = milp.solve(milp_request([food(1, protein=1.0, pack_grams=1000, price_cents=100)],
                                    protein=1100))
 
@@ -164,7 +223,7 @@ def test_min_portion_blocks_token_amounts():
 
 
 def test_category_coverage_forces_vegetables_and_fruit():
-    """Constraint 5. The specific failure Phase 3 exhibited.
+    """Constraint 5 ensures cost minimization still yields usable variety.
 
     Vegetables are a terrible way to buy macros, so a cost-minimizing model
     never picks them unless told to. This is the constraint that makes the
@@ -319,16 +378,11 @@ def test_unreachable_macros_at_any_budget():
     assert "any budget" in resp.message
 
 
-# -------------------------------------------------------- the Phase 4 payoff
+# --------------------------------------------------------- realistic catalog
 
 
 def test_the_stigler_basket_is_gone():
-    """THE test this whole phase exists for.
-
-    Same catalog as the Phase 3 Stigler test in test_lp.py, same targets. That
-    test asserts the basket is 3 joyless foods with no produce. This one asserts
-    the opposite. The diff between these two tests is the argument for Phase 4.
-    """
+    """A realistic catalog produces variety while meeting its hard constraints."""
     catalog = [
         food(1, food_id=1, category="protein", protein=0.80, carbs=0.08, fat=0.03,
              pack_grams=2268, price_cents=4499, name="whey"),
@@ -367,7 +421,7 @@ def test_the_stigler_basket_is_gone():
         idx = int(it.product_id) - 1
         cats.setdefault(catalog[idx].category, set()).add(catalog[idx].food_id)
 
-    # The three claims Phase 4 makes, asserted directly.
+    # The three variety claims are asserted directly.
     assert len(cats.get("protein", ())) >= 3, f"want >=3 protein foods, got {names}"
     assert len(cats.get("vegetable", ())) >= 2, f"want >=2 vegetables, got {names}"
     assert len(cats.get("fruit", ())) >= 1, f"want >=1 fruit, got {names}"

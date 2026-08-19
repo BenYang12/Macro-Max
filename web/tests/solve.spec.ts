@@ -26,7 +26,7 @@ async function mockSolveAPI(page: Page, authorizeFails = false) {
     }
     if (url.pathname === "/api/solve") {
 		expect(request.headers()["authorization"]).toBe("Bearer test-capability");
-      expect(request.postDataJSON()).toEqual({ target_id: 42, integer_packs: true });
+      expect(request.postDataJSON()).toEqual({ target_id: 42 });
       await route.fulfill({ json: { basket: {
         status: "optimal",
         items: [{ product_id: 7, product_name: "Chicken breast", food_name: "Chicken breast", packs: 2, grams: 1000, cost_cents: 1298 }],

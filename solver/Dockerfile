@@ -24,7 +24,7 @@ ENV PYTHONPATH=/app:/app/gen
 COPY --from=ghcr.io/astral-sh/uv:0.8.13 /uv /usr/local/bin/uv
 
 # Dependency layer FIRST, source SECOND. Docker caches each layer, so as long as
-# pyproject.toml is unchanged, editing lp.py reuses the cached dependency
+# pyproject.toml is unchanged, editing optimizer code reuses the cached dependency
 # install instead of redownloading OR-Tools (which is ~100MB). Getting this
 # order wrong makes every rebuild painfully slow.
 COPY pyproject.toml uv.lock ./
@@ -33,7 +33,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 ENV PATH="/app/.venv/bin:$PATH"
 
 COPY gen/ ./gen/
-COPY lp.py milp.py server.py ./
+COPY model_common.py milp.py server.py ./
 
 RUN useradd --create-home --uid 10001 macrocart && chown -R macrocart:macrocart /app
 USER macrocart

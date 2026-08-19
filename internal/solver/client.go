@@ -34,15 +34,9 @@ const (
 	daysPerWeek = 7
 )
 
-// Timeouts. I set the LP one short because GLOP solves this model in
-// milliseconds — if it hasn't answered in 10 seconds something is badly wrong
-// and I'd rather fail fast. Phase 4's MILP gets a longer one.
-const (
-	lpTimeout   = 10 * time.Second
-	milpTimeout = 30 * time.Second
-)
+const milpTimeout = 30 * time.Second
 
-// Phase 4 variety defaults.
+// Product variety defaults.
 //
 // WHY THESE LIVE IN GO AND NOT IN THE SOLVER: they are PRODUCT decisions, not
 // math. "A week's groceries should include at least two vegetables" is a claim
@@ -120,21 +114,6 @@ type SolveInput struct {
 	Target   store.UserTarget
 	Products []store.Product
 	Foods    map[int64]store.Food // keyed by food id, for nutrition and category
-
-	// IntegerPacks switches on the Phase 4 MILP. Phase 3 leaves it false.
-	IntegerPacks bool
-
-	// Variety floors. All ignored unless IntegerPacks is true, because they
-	// need the binary "is this food used" variables only the MILP has.
-	//
-	// A nil pointer means "use my default"; a non-nil pointer (including one
-	// pointing at 0) means "the caller decided". This is the same three-state
-	// pointer trick as my nullable database columns, and I need it for the same
-	// reason: 0 is a meaningful value here ("no vegetable requirement"), so it
-	// cannot double as the absent marker.
-	MinProteinSources *int32
-	MinVegetables     *int32
-	MinFruits         *int32
 }
 
 // Solve converts, calls, and returns the raw response.
@@ -147,11 +126,7 @@ func (c *Client) Solve(ctx context.Context, in SolveInput) (*solverv1.SolveRespo
 	// A DEADLINE on the RPC. Without one, a wedged solver would hold my HTTP
 	// handler open until the client gave up — and my server's WriteTimeout
 	// would fire, returning nothing useful.
-	timeout := lpTimeout
-	if in.IntegerPacks {
-		timeout = milpTimeout
-	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	callCtx, cancel := context.WithTimeout(ctx, milpTimeout)
 	defer cancel()
 
 	resp, err := c.rpc.Solve(callCtx, req)
@@ -237,17 +212,13 @@ func BuildRequest(in SolveInput) (*solverv1.SolveRequest, error) {
 	}
 	// A nil CaloriesMaxDaily leaves CaloriesMax at 0, which the contract
 	// defines as "derive one" — not "unlimited". That sentinel is documented
-	// in the proto and honored in lp.py.
+	// in the proto and honored by the optimizer.
 
-	opts := &solverv1.SolveOptions{IntegerPacks: in.IntegerPacks}
-
-	// The variety floors only mean anything to the MILP. Sending them with the
-	// LP would be harmless (it ignores them) but misleading to anyone reading a
-	// logged request, so I leave them at zero for Phase 3 solves.
-	if in.IntegerPacks {
-		opts.MinProteinSources = orDefaultInt32(in.MinProteinSources, defaultMinProteinSources)
-		opts.MinVegetables = orDefaultInt32(in.MinVegetables, defaultMinVegetables)
-		opts.MinFruits = orDefaultInt32(in.MinFruits, defaultMinFruits)
+	opts := &solverv1.SolveOptions{
+		IntegerPacks:      true,
+		MinProteinSources: defaultMinProteinSources,
+		MinVegetables:     defaultMinVegetables,
+		MinFruits:         defaultMinFruits,
 	}
 
 	return &solverv1.SolveRequest{
@@ -256,12 +227,4 @@ func BuildRequest(in SolveInput) (*solverv1.SolveRequest, error) {
 		Foods:       foods,
 		Options:     opts,
 	}, nil
-}
-
-// orDefaultInt32 resolves the nil-means-default pointer convention above.
-func orDefaultInt32(v *int32, fallback int32) int32 {
-	if v == nil {
-		return fallback
-	}
-	return *v
 }

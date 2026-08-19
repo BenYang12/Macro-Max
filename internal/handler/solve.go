@@ -59,11 +59,9 @@ func NewSolveHandler(s SolveStore, sv Solver, c SolveCache) *SolveHandler {
 type solveRequest struct {
 	TargetID *int64 `json:"target_id"`
 
-	// Opt into the Phase 4 MILP. Defaults to false, so today every request gets
-	// the LP. When Phase 4 lands this becomes the interesting switch, and I can
-	// compare the two answers side by side against the same target — which is
-	// the demo that justifies Phase 4's existence.
-	IntegerPacks bool `json:"integer_packs"`
+	// Accepted only so deployed clients using the former switch do not break.
+	// The optimizer is always the whole-pack model regardless of this value.
+	LegacyIntegerPacks *bool `json:"integer_packs"`
 }
 
 // Solve handles POST /v1/solve
@@ -135,10 +133,9 @@ func (h *SolveHandler) Solve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := solver.SolveInput{
-		Target:       target,
-		Products:     products,
-		Foods:        foods,
-		IntegerPacks: req.IntegerPacks,
+		Target:   target,
+		Products: products,
+		Foods:    foods,
 	}
 
 	// THE CACHE LOOKUP. The key is derived from the fully-built request plus a
@@ -226,10 +223,8 @@ func (h *SolveHandler) persist(ctx context.Context, target store.UserTarget, key
 
 	items := make([]store.BasketItem, 0, len(resp.Items))
 	for _, it := range resp.Items {
-		// The schema requires packs > 0, and an LP solve can legitimately
-		// produce a fractional pack count below 1. Rounding up is the honest
-		// reading: you cannot buy a fraction of a bag, so any nonzero amount
-		// means at least one pack.
+		// The wire type is a float for compatibility, so normalize the solver's
+		// near-integer result before storing it in the integer database column.
 		packs := int(it.Packs)
 		if float64(packs) < it.Packs {
 			packs++
@@ -256,7 +251,7 @@ func (h *SolveHandler) persist(ctx context.Context, target store.UserTarget, key
 // First, protojson emits enums as SOLVE_STATUS_OPTIMAL, which is fine for a
 // machine and ugly for a frontend; I want "optimal". Second, and more
 // importantly, my public JSON API should not be coupled to my internal gRPC
-// contract — if I renumber a proto field in Phase 4, no frontend should care.
+// contract — if I renumber a proto field, no frontend should care.
 func writeSolveResponse(w http.ResponseWriter, resp *solverv1.SolveResponse) {
 	// The INFEASIBLE branch is the interesting one, and it deserves its own
 	// status code. 422 says "I understood you, and there's no answer" — which

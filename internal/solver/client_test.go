@@ -182,7 +182,7 @@ func TestBuildRequest_FiltersUnusableProducts(t *testing.T) {
 	}
 }
 
-// Distinctness in Phase 4 counts FOODS, not products, so food_id has to survive
+// Distinctness counts foods, not products, so food_id has to survive
 // the conversion intact. Two pack sizes of one rice must share a food_id.
 func TestBuildRequest_PreservesFoodIDForDistinctness(t *testing.T) {
 	in := fixture()
@@ -256,13 +256,17 @@ func TestBuildRequest_ErrorsWhenEverythingFiltered(t *testing.T) {
 
 func TestBuildRequest_SetsIntegerPacksFlag(t *testing.T) {
 	in := fixture()
-	in.IntegerPacks = true
 
 	req, err := BuildRequest(in)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
 	if !req.Options.IntegerPacks {
-		t.Error("IntegerPacks did not reach the request")
+		t.Error("whole-pack optimization must always be enabled")
+	}
+	if req.Options.MinProteinSources != defaultMinProteinSources ||
+		req.Options.MinVegetables != defaultMinVegetables ||
+		req.Options.MinFruits != defaultMinFruits {
+		t.Error("product variety defaults were not applied")
 	}
 }

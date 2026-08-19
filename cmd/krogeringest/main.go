@@ -60,7 +60,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	client := kroger.New(cfg.KrogerClientID, cfg.KrogerClientSecret, nil)
+	client := kroger.New(cfg.KrogerClientID, cfg.KrogerClientSecret)
 
 	// Probe is read-only and needs no database: it exists purely so I can see
 	// what Harris Teeter actually CALLS a food before guessing a search term.
