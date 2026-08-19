@@ -433,3 +433,93 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+// Current Foundation records routinely omit nutrient 1008 and report energy
+// only as Atwater kcal (2047/2048). Before those ids were recognized, every
+// such record failed with "no energy nutrient", so a curated mapping of
+// Foundation ids — the data type this project says to PREFER — imported
+// almost nothing while SR Legacy ids sailed through. fdc 2346393 (raw
+// almonds) is a real example of the shape.
+func TestNormalize_AtwaterEnergyIDs(t *testing.T) {
+	macros := []FoodNutrient{
+		nutrient(NutrientProtein, "G", 21.2),
+		nutrient(NutrientCarbs, "G", 21.6),
+		nutrient(NutrientFat, "G", 49.9),
+	}
+	with := func(extra ...FoodNutrient) FoodDetail {
+		return FoodDetail{
+			FdcID:         2346393,
+			DataType:      DataTypeFoundation,
+			FoodNutrients: append(append([]FoodNutrient{}, macros...), extra...),
+		}
+	}
+
+	tests := []struct {
+		name     string
+		detail   FoodDetail
+		wantKcal float64
+	}{
+		{
+			name:     "Atwater specific factors are used when 1008 is absent",
+			detail:   with(nutrient(NutrientEnergyAtwaterSpecific, "KCAL", 579)),
+			wantKcal: 579,
+		},
+		{
+			name:     "Atwater general factors are used when nothing better exists",
+			detail:   with(nutrient(NutrientEnergyAtwaterGeneral, "KCAL", 620)),
+			wantKcal: 620,
+		},
+		{
+			// Precedence, not merely presence: a record carrying all three must
+			// pick the plain kcal reading, and one carrying both Atwater
+			// figures must pick the specific one.
+			name: "plain kcal outranks both Atwater figures",
+			detail: with(
+				nutrient(NutrientEnergyAtwaterGeneral, "KCAL", 620),
+				nutrient(NutrientEnergyAtwaterSpecific, "KCAL", 579),
+				nutrient(NutrientEnergyKC, "KCAL", 575),
+			),
+			wantKcal: 575,
+		},
+		{
+			name: "Atwater specific outranks Atwater general",
+			detail: with(
+				nutrient(NutrientEnergyAtwaterGeneral, "KCAL", 620),
+				nutrient(NutrientEnergyAtwaterSpecific, "KCAL", 579),
+			),
+			wantKcal: 579,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Normalize(tc.detail)
+			if err != nil {
+				t.Fatalf("Normalize() error = %v", err)
+			}
+			if !closeTo(got.Kcal, tc.wantKcal, 0.01) {
+				t.Errorf("Kcal = %v, want %v", got.Kcal, tc.wantKcal)
+			}
+		})
+	}
+}
+
+// A record with macros but no energy under ANY recognized id is still fatal;
+// widening the accepted set must not turn that into a silent zero.
+func TestNormalize_NoEnergyAtAllStillFails(t *testing.T) {
+	_, err := Normalize(FoodDetail{
+		FdcID:    999,
+		DataType: DataTypeFoundation,
+		FoodNutrients: []FoodNutrient{
+			nutrient(NutrientProtein, "G", 10),
+			nutrient(NutrientCarbs, "G", 10),
+			nutrient(NutrientFat, "G", 10),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected an error when no energy nutrient is present")
+	}
+	if !strings.Contains(err.Error(), "no energy nutrient") {
+		t.Errorf("error = %q, want it to mention the missing energy nutrient", err)
+	}
+}

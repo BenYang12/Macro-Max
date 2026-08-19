@@ -122,6 +122,15 @@ const (
 	NutrientCarbs    = 1005
 	NutrientEnergyKC = 1008 // energy in kcal
 	NutrientEnergyKJ = 1062 // energy in kJ — needs conversion
+
+	// Current Foundation records frequently omit 1008 entirely and report
+	// energy only under these two, both already in kcal. 2048 applies
+	// food-group-specific Atwater coefficients; 2047 applies the general
+	// 4/4/9 factors. Without them the importer rejects most Foundation
+	// records with "no energy nutrient" — which is how a mapping of
+	// Foundation ids can fail wholesale while SR Legacy ids succeed.
+	NutrientEnergyAtwaterSpecific = 2048
+	NutrientEnergyAtwaterGeneral  = 2047
 )
 
 // Data type names, used for the Foundation -> SR Legacy -> Branded preference

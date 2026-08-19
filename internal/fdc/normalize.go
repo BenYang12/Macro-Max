@@ -92,6 +92,8 @@ func normalizeNutrients(d FoodDetail, out Per100g) (Per100g, error) {
 		foundProtein, foundCarbs, foundFat bool
 		kcal, kj                           float64
 		foundKcal, foundKJ                 bool
+		atwaterSpecific, atwaterGeneral    float64
+		foundSpecific, foundGeneral        bool
 	)
 
 	for _, fn := range d.FoodNutrients {
@@ -106,6 +108,10 @@ func normalizeNutrients(d FoodDetail, out Per100g) (Per100g, error) {
 			kcal, foundKcal = fn.Amount, true
 		case NutrientEnergyKJ:
 			kj, foundKJ = fn.Amount, true
+		case NutrientEnergyAtwaterSpecific:
+			atwaterSpecific, foundSpecific = fn.Amount, true
+		case NutrientEnergyAtwaterGeneral:
+			atwaterGeneral, foundGeneral = fn.Amount, true
 		}
 	}
 
@@ -127,16 +133,34 @@ func normalizeNutrients(d FoodDetail, out Per100g) (Per100g, error) {
 			d.FdcID, strings.Join(missing, ", "))
 	}
 
-	// Energy: prefer kcal, fall back to converting kJ. Preferring the directly
-	// reported value avoids compounding a conversion when we don't have to.
+	// Energy, in descending order of directness. Preferring a value already
+	// reported in kcal avoids compounding a unit conversion we don't need.
+	//
+	//  1008  plain "Energy" in kcal — what SR Legacy reports.
+	//  2048  Atwater SPECIFIC factors: per-food-group coefficients, the more
+	//        accurate of the two Atwater figures, so it outranks 2047.
+	//  2047  Atwater GENERAL factors: the flat 4/4/9.
+	//  1062  kJ, converted last because it is the only lossy branch.
+	//
+	// 2047 is worth understanding before trusting it: it is *derived* from the
+	// same macros this record already reports, so Validate's Atwater tripwire
+	// cannot detect a bad record whose energy came from 2047 — the check would
+	// be comparing the macros against themselves. That is a reason to prefer
+	// 2048, not a reason to reject 2047, which is still USDA's own figure.
 	switch {
 	case foundKcal:
 		out.Kcal = kcal
+	case foundSpecific:
+		out.Kcal = atwaterSpecific
+	case foundGeneral:
+		out.Kcal = atwaterGeneral
 	case foundKJ:
 		out.Kcal = kj / kcalPerKJ
 	default:
-		return Per100g{}, fmt.Errorf("fdc %d: no energy nutrient (neither %d kcal nor %d kJ)",
-			d.FdcID, NutrientEnergyKC, NutrientEnergyKJ)
+		return Per100g{}, fmt.Errorf(
+			"fdc %d: no energy nutrient (none of %d kcal, %d/%d Atwater kcal, %d kJ)",
+			d.FdcID, NutrientEnergyKC, NutrientEnergyAtwaterSpecific,
+			NutrientEnergyAtwaterGeneral, NutrientEnergyKJ)
 	}
 
 	return out, nil
