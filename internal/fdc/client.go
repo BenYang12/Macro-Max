@@ -183,13 +183,66 @@ func (c *Client) Detail(ctx context.Context, fdcID int64) (FoodDetail, error) {
 	return out, nil
 }
 
+// maxAttempts bounds the retry loop in get. Three is enough to ride out the
+// intermittent failures observed against FDC without turning a genuinely
+// missing record into a nine-second wait.
+const maxAttempts = 3
+
+// retryBackoff is the pause before attempt n+1. Short on purpose: this is
+// smoothing over a flaky endpoint, not backing off from a rate limit, and the
+// importer already sleeps 200ms between foods.
+func retryBackoff(attempt int) time.Duration {
+	return time.Duration(attempt) * 250 * time.Millisecond
+}
+
+// isRetryable reports whether a status is worth another attempt.
+//
+// 404 IS on this list, which is unusual enough to justify. FDC's detail
+// endpoint intermittently answers 404 for ids that exist: the same id can 404,
+// then return 200 seconds later with rate-limit headers showing ~3550 of 3600
+// requests remaining, so it is neither quota nor a missing record. Running the
+// importer three times in a row produced 20, 26, and 24 of 41 foods, with a
+// different failure set each time. Without a retry those transient 404s become
+// permanent skips, and the operator sees a curated mapping that looks broken.
+// A record that is genuinely absent still fails, just after three tries.
+func isRetryable(status int) bool {
+	return status == http.StatusNotFound ||
+		status == http.StatusTooManyRequests ||
+		status >= 500
+}
+
 // get is the shared plumbing: build the request, send it, check the status,
-// decode the body. Both public methods funnel through here so timeout
-// handling, error wrapping, and status checks exist in exactly one place.
+// decode the body, and retry the failures worth retrying. Both public methods
+// funnel through here so timeout handling, error wrapping, status checks, and
+// the retry policy exist in exactly one place.
 //
 // dst is `any` for the same reason readJSON's was: it receives a POINTER to
 // whatever struct the caller wants filled.
 func (c *Client) get(ctx context.Context, path string, params url.Values, dst any) error {
+	var err error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			timer := time.NewTimer(retryBackoff(attempt - 1))
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		}
+
+		var retryable bool
+		retryable, err = c.getOnce(ctx, path, params, dst)
+		if err == nil || !retryable {
+			return err
+		}
+	}
+	return fmt.Errorf("after %d attempts: %w", maxAttempts, err)
+}
+
+// getOnce performs a single attempt, reporting whether a failure is worth
+// retrying. A nil error always means "done".
+func (c *Client) getOnce(ctx context.Context, path string, params url.Values, dst any) (retryable bool, err error) {
 	endpoint := c.BaseURL + path + "?" + params.Encode()
 
 	// http.NewRequestWithContext, never http.NewRequest. The context is what
@@ -198,7 +251,7 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, dst an
 	// matter what, ignoring every cancellation signal in the program.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return fmt.Errorf("building request: %w", err)
+		return false, fmt.Errorf("building request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
@@ -208,7 +261,9 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, dst an
 		// NOT how a 404 or 500 arrives — those are successful HTTP exchanges
 		// that happen to carry an error status, and they come back through
 		// resp below. Conflating the two is a very common bug.
-		return fmt.Errorf("requesting %s: %w", path, err)
+		// Transport failures are worth another attempt for the same reason a
+		// 5xx is: nothing about the request itself is wrong.
+		return true, fmt.Errorf("requesting %s: %w", path, err)
 	}
 	// MANDATORY: an unclosed response body leaks the underlying TCP
 	// connection, and the pool eventually starves. defer it immediately after
@@ -228,21 +283,23 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, dst an
 		// 403 deserves its own message because it has exactly one likely
 		// cause, and a good error saves ten minutes of confusion.
 		if resp.StatusCode == http.StatusForbidden {
-			return fmt.Errorf("FDC returned 403: check FDC_API_KEY")
+			return false, fmt.Errorf("FDC returned 403: check FDC_API_KEY")
 		}
 		// 429 is the documented rate limit (1000 requests/hour by default).
 		if resp.StatusCode == http.StatusTooManyRequests {
-			return fmt.Errorf("FDC returned 429: rate limited, slow down")
+			return true, fmt.Errorf("FDC returned 429: rate limited, slow down")
 		}
-		return fmt.Errorf("FDC returned %d for %s: %s", resp.StatusCode, path, body)
+		return isRetryable(resp.StatusCode), fmt.Errorf("FDC returned %d for %s: %s", resp.StatusCode, path, body)
 	}
 
 	// Decode straight from the response body — a STREAM. json.Unmarshal would
 	// require loading the whole body into a []byte first; the decoder reads
 	// incrementally.
 	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decoding %s response: %w", path, err)
+		// A truncated or malformed body is usually a blip, not a contract
+		// change, so one more attempt is worth it.
+		return true, fmt.Errorf("decoding %s response: %w", path, err)
 	}
 
-	return nil
+	return false, nil
 }

@@ -14,10 +14,12 @@ package fdc
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newTestClient spins up a fake FDC server whose handler is supplied by the
@@ -273,5 +275,89 @@ func TestDetail_RespectsContextCancellation(t *testing.T) {
 
 	if _, err := c.Detail(ctx, 1); err == nil {
 		t.Fatal("expected an error from a cancelled context; got nil")
+	}
+}
+
+// FDC's detail endpoint intermittently answers 404 for ids that exist, so the
+// client retries. Without this the importer turned transient failures into
+// permanent skips: three consecutive runs of the same curated mapping imported
+// 20, 26, and 24 of 41 foods, each with a different failure set.
+func TestGet_RetriesTransientFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		failStatus   int
+		failTimes    int
+		wantAttempts int
+		wantErr      bool
+	}{
+		{"transient 404 succeeds on retry", http.StatusNotFound, 1, 2, false},
+		{"transient 500 succeeds on retry", http.StatusInternalServerError, 1, 2, false},
+		{"429 is retried", http.StatusTooManyRequests, 1, 2, false},
+		{"persistent 404 gives up after maxAttempts", http.StatusNotFound, 99, maxAttempts, true},
+		// A bad key is not transient: retrying wastes quota and delays a clear
+		// diagnosis, so 403 must fail on the first attempt.
+		{"403 is not retried", http.StatusForbidden, 99, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				attempts++
+				if attempts <= tc.failTimes {
+					w.WriteHeader(tc.failStatus)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"fdcId":123,"description":"ok","dataType":"Foundation"}`))
+			}))
+			defer srv.Close()
+
+			c := New("key")
+			c.BaseURL = srv.URL
+
+			got, err := c.Detail(context.Background(), 123)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected an error")
+			}
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("Detail: %v", err)
+				}
+				if got.FdcID != 123 {
+					t.Errorf("FdcID = %d; want 123", got.FdcID)
+				}
+			}
+			if attempts != tc.wantAttempts {
+				t.Errorf("made %d attempt(s); want %d", attempts, tc.wantAttempts)
+			}
+		})
+	}
+}
+
+// A cancelled context must stop the retry loop rather than sleeping through
+// its full backoff schedule.
+func TestGet_CancellationStopsRetrying(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := New("key")
+	c.BaseURL = srv.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Cancel after the first attempt fails, while the backoff timer is running.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	if _, err := c.Detail(ctx, 123); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v; want context.Canceled", err)
+	}
+	if attempts >= maxAttempts {
+		t.Errorf("made %d attempts; cancellation should have cut the loop short", attempts)
 	}
 }
