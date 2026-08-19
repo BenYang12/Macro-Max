@@ -258,10 +258,17 @@ func normalizeBranded(d FoodDetail, out Per100g) (Per100g, error) {
 // call. Pass "" to skip the category-specific check.
 func Validate(p Per100g, category string) error {
 	// 1. Macros cannot exceed the mass they are measured in. 100 g of food
-	// cannot contain 120 g of protein. The threshold is 105, not 100, because
-	// legitimate rounding and moisture accounting can push a pure protein
-	// isolate a hair over 100.
-	const maxGramsPer100g = 105
+	// cannot contain 120 g of protein.
+	//
+	// The per-macro threshold is exactly 100 because that is what the database
+	// enforces: migration 000001 declares each macro column
+	// CHECK (... BETWEEN 0 AND 100). A looser limit here did not admit more
+	// data, it just moved WHERE the rejection happened — a record at 102 g
+	// passed this function and then died inside UpdateFoodNutrition on a raw
+	// Postgres constraint violation, discarding the readable diagnosis this
+	// function exists to produce. Validation that is more permissive than
+	// storage is not validation.
+	const maxGramsPer100g = 100
 	if p.ProteinG > maxGramsPer100g || p.CarbsG > maxGramsPer100g || p.FatG > maxGramsPer100g {
 		return fmt.Errorf("implausible macro > %dg/100g (protein %.1f, carbs %.1f, fat %.1f)",
 			maxGramsPer100g, p.ProteinG, p.CarbsG, p.FatG)
@@ -276,7 +283,13 @@ func Validate(p Per100g, category string) error {
 	// Total macro mass over 105 g is impossible even when each one alone is
 	// fine — this catches the per-serving-division bug, which inflates all
 	// three proportionally and so can slip past the individual checks.
-	if total := p.ProteinG + p.CarbsG + p.FatG; total > maxGramsPer100g {
+	//
+	// The SUM keeps a 5 g tolerance the individual limit does not, because no
+	// column stores the sum: nothing downstream will reject it, and rounding
+	// three independently-reported figures can legitimately land a touch over
+	// 100 for a food that is essentially all one macro.
+	const maxSumGramsPer100g = 105
+	if total := p.ProteinG + p.CarbsG + p.FatG; total > maxSumGramsPer100g {
 		return fmt.Errorf("macros sum to %.1fg per 100g, which is impossible", total)
 	}
 

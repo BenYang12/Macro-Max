@@ -523,3 +523,36 @@ func TestNormalize_NoEnergyAtAllStillFails(t *testing.T) {
 		t.Errorf("error = %q, want it to mention the missing energy nutrient", err)
 	}
 }
+
+// The per-macro limit must match the database exactly. migration 000001
+// declares each macro column CHECK (... BETWEEN 0 AND 100), so a record this
+// function accepts above 100 would be rejected later by Postgres, replacing a
+// readable diagnosis with a raw constraint violation.
+func TestValidate_PerMacroLimitMatchesTheDatabaseCheck(t *testing.T) {
+	// Oil: exactly 100 g of fat per 100 g is real and must pass.
+	if err := Validate(Per100g{Kcal: 884, FatG: 100}, "fat"); err != nil {
+		t.Errorf("100g of fat is a real food (oil), got: %v", err)
+	}
+	// A hair over the column limit must fail HERE, not in the database.
+	err := Validate(Per100g{Kcal: 410, ProteinG: 102}, "protein")
+	if err == nil {
+		t.Fatal("102g of protein per 100g must be rejected before the insert")
+	}
+	if !strings.Contains(err.Error(), "implausible macro") {
+		t.Errorf("error = %q; want the implausible-macro diagnosis", err)
+	}
+}
+
+// The SUM keeps a small tolerance the individual limit does not, because no
+// column stores the sum. Pin both edges so neither drifts into the other.
+func TestValidate_SumToleranceIsSeparateFromThePerMacroLimit(t *testing.T) {
+	// 98 + 4 = 102: every macro under 100, sum over 100, still within the
+	// rounding tolerance the sum check allows.
+	if err := Validate(Per100g{Kcal: 408, ProteinG: 98, CarbsG: 4}, ""); err != nil {
+		t.Errorf("a sum of 102g should survive rounding tolerance, got: %v", err)
+	}
+	// 60 + 50 = 110: comfortably impossible, the per-serving-division symptom.
+	if err := Validate(Per100g{Kcal: 440, ProteinG: 60, CarbsG: 50}, ""); err == nil {
+		t.Error("a sum of 110g per 100g must be rejected")
+	}
+}
