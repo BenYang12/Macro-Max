@@ -75,9 +75,27 @@ func NewCartHandler(s CartStore, k CartClient, clientSecret, webAppURL string) (
 }
 
 func validateOriginURL(name, raw string) (*url.URL, error) {
-	u, err := url.Parse(raw)
+	// A dashboard text box is a lossy channel: it happily stores a trailing
+	// newline or a stray leading space that no human can see when re-reading
+	// the field. Trimming here costs nothing and removes an entire category of
+	// unfalsifiable "but I typed it correctly" deploy failures.
+	trimmed := strings.TrimSpace(raw)
+
+	// An UNSET variable and a MALFORMED one are different operator mistakes —
+	// "you forgot to add it" versus "look closely at what you pasted" — and
+	// they used to share one error message, which made a failing deploy
+	// impossible to diagnose from the log alone. Say which one happened.
+	if trimmed == "" {
+		return nil, fmt.Errorf("%s is not set", name)
+	}
+
+	u, err := url.Parse(trimmed)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, fmt.Errorf("%s must be an absolute http or https URL", name)
+		// %q quotes the value and escapes anything invisible, so surrounding
+		// quote characters, tabs, or a missing scheme show up literally in the
+		// log instead of being silently re-rendered as a plausible-looking URL.
+		// The value is a public origin, never a credential, so logging it is safe.
+		return nil, fmt.Errorf("%s must be an absolute http or https URL, got %q", name, trimmed)
 	}
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return nil, fmt.Errorf("%s must be an origin without credentials, path, query, or fragment", name)

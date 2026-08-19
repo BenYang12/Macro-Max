@@ -291,6 +291,26 @@ func TestURLValidation(t *testing.T) {
 			t.Errorf("accepted %q", raw)
 		}
 	}
+
+	// An unset variable reports differently from a malformed one. These two
+	// mistakes need different fixes, so a deploy log that cannot tell them
+	// apart sends the operator hunting in the wrong place.
+	_, err := validateOriginURL("WEB_APP_URL", "   ")
+	if err == nil || !strings.Contains(err.Error(), "is not set") {
+		t.Errorf("blank value: got %v, want an \"is not set\" error", err)
+	}
+
+	// A malformed value must appear verbatim in the message. Quoting is what
+	// makes an invisible defect — surrounding quotes here — visible in a log.
+	_, err = validateOriginURL("WEB_APP_URL", `"https://app.example.com"`)
+	if err == nil || !strings.Contains(err.Error(), `got "\"https://app.example.com\""`) {
+		t.Errorf("quoted value: got %v, want the raw value echoed", err)
+	}
+
+	// Surrounding whitespace is a dashboard artifact, not operator intent.
+	if _, err := validateOriginURL("WEB_APP_URL", "  https://app.example.com\n"); err != nil {
+		t.Errorf("padded value rejected: %v", err)
+	}
 	if _, err := NewCartHandler(validStore(), &fakeCartClient{}, "s", "not-a-url"); err == nil {
 		t.Fatal("bad web origin accepted")
 	}
