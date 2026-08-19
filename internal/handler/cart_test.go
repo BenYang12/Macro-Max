@@ -329,3 +329,49 @@ func TestURLValidation(t *testing.T) {
 		t.Fatalf("cookie path = %q", cookie.Path)
 	}
 }
+
+// Kroger reports which permissions a token actually carries, and this check is
+// the only thing standing between a scopeless token and a confusing 403 from
+// the cart endpoint later. The separator is the subtle part: the spec says
+// spaces, providers sometimes send commas, and reading "a,b" as one scope
+// would reject a perfectly good token.
+func TestScopeContains(t *testing.T) {
+	granted := []struct {
+		raw  string
+		want bool
+	}{
+		{"cart.basic:write", true},
+		{"profile.compact cart.basic:write", true},
+		{"profile.compact,cart.basic:write", true},
+		{"cart.basic:write,profile.compact", true},
+		{"  cart.basic:write\n", true},
+		{"", false},
+		{"profile.compact", false},
+		// A prefix is not a match: this scope grants strictly less.
+		{"cart.basic:read", false},
+		// Nor is a superstring, however plausible it looks.
+		{"cart.basic:writeextra", false},
+	}
+	for _, tc := range granted {
+		if got := scopeContains(tc.raw, kroger.ScopeCartWrite); got != tc.want {
+			t.Errorf("scopeContains(%q) = %v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// Kroger omits `scope` from the authorization-code token response, which RFC
+// 6749 permits and which used to be read as a denial — killing the feature for
+// every user despite the app holding cart.basic:write. An unreported scope must
+// fall through to the cart call, which is the authoritative check.
+func TestCallbackProceedsWhenScopeUnreported(t *testing.T) {
+	c := &fakeCartClient{token: kroger.UserToken{AccessToken: "a"}}
+	h := newCartHandler(t, validStore(), c)
+	state, cookie, _ := authorize(t, h, `{"target_id":42}`, "http://localhost:3000")
+	success, failure := result(t, callback(h, "code=xyz&state="+url.QueryEscape(state), cookie))
+	if success != "success" {
+		t.Fatalf("unreported scope should not block the cart add, got failure %q", failure)
+	}
+	if len(c.gotItems) == 0 {
+		t.Fatal("expected the cart add to be attempted")
+	}
+}

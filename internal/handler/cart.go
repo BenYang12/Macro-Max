@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -191,10 +192,32 @@ func (h *CartHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	tok, err := h.Kroger.ExchangeCode(r.Context(), code, h.RedirectURI)
 	if err != nil || tok.AccessToken == "" {
+		// The redirect carries only an opaque code because the browser is an
+		// untrusted audience, but SOMEBODY has to be told what actually broke.
+		// The error text describes Kroger's rejection and never contains a
+		// token, so the server log is the right audience for it.
+		log.Printf("kroger cart: token exchange failed: %v", err)
 		h.redirectResult(w, r, "token_exchange_failed")
 		return
 	}
-	if !scopeContains(tok.Scope, kroger.ScopeCartWrite) {
+	// The scope check is ADVISORY, and the empty case is why.
+	//
+	// RFC 6749 makes the `scope` field OPTIONAL in a token response: a server
+	// may omit it to mean "you got exactly what you asked for". Kroger omits
+	// it. Treating that silence as a denial rejected every real token — the
+	// authorization succeeded, the app is granted cart.basic:write, and the
+	// user still got told permission was refused. A check that cannot tell
+	// "denied" from "not reported" is not a safety net, it is a coin flip.
+	//
+	// So: reject only when Kroger AFFIRMATIVELY listed scopes and cart write
+	// was not among them. When nothing is reported, proceed and let the cart
+	// call be the judge — AddToCart turns a real 403 into a precise error,
+	// which was always the authoritative answer. The cost of guessing wrong is
+	// one failed API call; the cost of the old behavior was a dead feature.
+	if tok.Scope != "" && !scopeContains(tok.Scope, kroger.ScopeCartWrite) {
+		// A granted scope names a permission, it does not confer one, so this
+		// is safe to log — and it is the only record of why the flow stopped.
+		log.Printf("kroger cart: token granted scopes %q, want %q", tok.Scope, kroger.ScopeCartWrite)
 		h.redirectResult(w, r, "missing_cart_scope")
 		return
 	}
@@ -216,6 +239,12 @@ func (h *CartHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		items = append(items, kroger.CartItem{UPC: line.ExternalID, Quantity: line.Packs, Modality: "PICKUP"})
 	}
 	if err := h.Kroger.AddToCart(r.Context(), tok.AccessToken, items); err != nil {
+		// Now that the scope pre-check no longer blocks unreported scopes, THIS
+		// is where a genuinely missing permission surfaces — as Kroger's 403,
+		// which AddToCart already translates into a sentence naming the scope.
+		// Losing that to an opaque redirect code would put the diagnosis right
+		// back out of reach.
+		log.Printf("kroger cart: add to cart failed: %v", err)
 		h.redirectResult(w, r, "cart_add_failed")
 		return
 	}
@@ -302,8 +331,21 @@ func constantTimeNonceEqual(a, b string) bool {
 	bBytes, bErr := base64.RawURLEncoding.DecodeString(b)
 	return aErr == nil && bErr == nil && len(aBytes) == cartNonceBytes && len(bBytes) == cartNonceBytes && hmac.Equal(aBytes, bBytes)
 }
+
+// scopeContains reports whether a granted-scope list includes one scope.
+//
+// RFC 6749 says the list is space-delimited, and strings.Fields alone would be
+// the letter-perfect reading of the spec. Real providers are looser than that:
+// a comma-separated list is common enough to be worth accepting, and reading
+// one as a single unsplittable scope would reject a token that DOES carry the
+// permission — failing closed on a technicality rather than on a real denial.
+// Splitting on both separators costs nothing and cannot widen the match: every
+// candidate still has to equal `want` exactly.
 func scopeContains(raw, want string) bool {
-	for _, scope := range strings.Fields(raw) {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == ','
+	})
+	for _, scope := range fields {
 		if scope == want {
 			return true
 		}
