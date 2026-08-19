@@ -4,7 +4,14 @@ docs/PLAN.md
 
 
 # Local environment variables (real secrets live here; .env.example is committed)
+#
+# The wildcard matters as much as the bare name. Ignoring only ".env" leaves
+# every neighbour it grows — .env.local, .env.backup, a dated copy made before
+# editing — tracked by default, and each one holds the same live credentials.
+# Deny the whole family, then re-admit the single file that is meant to ship.
 .env
+.env.*
+!.env.example
 .venv
 
 

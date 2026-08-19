@@ -20,8 +20,15 @@ services:
 
     # Port mapping (host:container) -> inside container Postgres listens on 5432
     # mapping publishes it on my Mac's localhost:5432
+    #
+    # The HOST half is overridable because 5432 is the default for every
+    # Postgres on earth, so anything else already installed (Postgres.app, a
+    # brew service, another project's compose file) claims it first and this
+    # container then fails to start with "address already in use". Setting
+    # POSTGRES_HOST_PORT in .env moves only the host side; nothing inside the
+    # container changes, and DATABASE_URL has to name the same port.
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
 
     #First-boot environment variables
     environment:
