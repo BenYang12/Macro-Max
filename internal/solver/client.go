@@ -214,8 +214,10 @@ func BuildRequest(in SolveInput) (*solverv1.SolveRequest, error) {
 	// defines as "derive one" — not "unlimited". That sentinel is documented
 	// in the proto and honored by the optimizer.
 
+	// IntegerPacks is deliberately not set. The field is deprecated in the
+	// proto and the optimizer never reads it — milp.py always models whole
+	// packs — so setting it asserted a mode that no longer has an off switch.
 	opts := &solverv1.SolveOptions{
-		IntegerPacks:      true,
 		MinProteinSources: defaultMinProteinSources,
 		MinVegetables:     defaultMinVegetables,
 		MinFruits:         defaultMinFruits,

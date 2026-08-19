@@ -254,15 +254,12 @@ func TestBuildRequest_ErrorsWhenEverythingFiltered(t *testing.T) {
 	}
 }
 
-func TestBuildRequest_SetsIntegerPacksFlag(t *testing.T) {
+func TestBuildRequest_SetsVarietyDefaults(t *testing.T) {
 	in := fixture()
 
 	req, err := BuildRequest(in)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
-	}
-	if !req.Options.IntegerPacks {
-		t.Error("whole-pack optimization must always be enabled")
 	}
 	if req.Options.MinProteinSources != defaultMinProteinSources ||
 		req.Options.MinVegetables != defaultMinVegetables ||

@@ -58,10 +58,6 @@ func NewSolveHandler(s SolveStore, sv Solver, c SolveCache) *SolveHandler {
 // reason as createTargetRequest.
 type solveRequest struct {
 	TargetID *int64 `json:"target_id"`
-
-	// Accepted only so deployed clients using the former switch do not break.
-	// The optimizer is always the whole-pack model regardless of this value.
-	LegacyIntegerPacks *bool `json:"integer_packs"`
 }
 
 // Solve handles POST /v1/solve
@@ -138,8 +134,9 @@ func (h *SolveHandler) Solve(w http.ResponseWriter, r *http.Request) {
 		Foods:    foods,
 	}
 
-	// THE CACHE LOOKUP. The key is derived from the fully-built request plus a
-	// fingerprint of the prices, so any change to targets, catalog, options, or
+	// THE CACHE LOOKUP. The key is derived from the fully-built request, which
+	// already carries the targets, options, and every candidate product's id
+	// and effective price — so any change to targets, catalog, options, or
 	// prices produces a different key and therefore a miss. I never have to
 	// decide when to invalidate — I only have to make sure everything that
 	// affects the answer is in the key.
@@ -151,7 +148,7 @@ func (h *SolveHandler) Solve(w http.ResponseWriter, r *http.Request) {
 	var cacheKey string
 	if h.Cache != nil {
 		if built, err := solver.BuildRequest(input); err == nil {
-			if k, err := solver.SolveKey(built, products); err == nil {
+			if k, err := solver.SolveKey(built); err == nil {
 				cacheKey = k
 				if cached := h.Cache.Get(ctx, k); cached != nil {
 					w.Header().Set("X-Cache", "hit")

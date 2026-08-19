@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -324,23 +323,19 @@ func TestSolve_NoCandidatesReturns422(t *testing.T) {
 	}
 }
 
-func TestSolve_AcceptsButIgnoresLegacyIntegerPacksOption(t *testing.T) {
-	for _, value := range []string{"true", "false"} {
-		t.Run(value, func(t *testing.T) {
-			sv := okSolver()
-			h := NewSolveHandler(okStore(), sv, nil)
-			body := fmt.Sprintf(`{"target_id": 1, "integer_packs": %s}`, value)
-			if rr := postSolve(t, h, body); rr.Code != http.StatusOK {
-				t.Fatalf("status = %d; want 200", rr.Code)
-			}
-			built, err := solver.BuildRequest(sv.got)
-			if err != nil {
-				t.Fatalf("BuildRequest: %v", err)
-			}
-			if !built.Options.IntegerPacks {
-				t.Fatal("legacy option changed the whole-pack solver mode")
-			}
-		})
+// integer_packs was a request field the handler decoded and never read: whole
+// packs are the only mode the optimizer implements. It survived solely so
+// DisallowUnknownFields would not 400 on clients that no longer exist, so the
+// field is gone and the body is now treated like any other unknown key.
+func TestSolve_LegacyIntegerPacksOptionIsRejected(t *testing.T) {
+	h := NewSolveHandler(okStore(), okSolver(), nil)
+
+	rr := postSolve(t, h, `{"target_id": 1, "integer_packs": true}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "unknown key") {
+		t.Errorf("body should name the unknown key: %s", rr.Body.String())
 	}
 }
 

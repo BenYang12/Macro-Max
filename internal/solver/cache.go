@@ -20,19 +20,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 
 	solverv1 "github.com/BenYang12/Macro-Max/internal/gen/solver/v1"
-	"github.com/BenYang12/Macro-Max/internal/store"
 )
 
 // 24 hours. Long enough that repeated tweaking is fast; short enough that a
-// price I somehow failed to fingerprint can't haunt me for a week. The TTL is
+// price I somehow failed to capture in the key can't haunt me for a week. The TTL is
 // my backstop, not my primary invalidation.
 const cacheTTL = 24 * time.Hour
 
@@ -58,55 +55,36 @@ func (c *Cache) Close() error {
 	return c.rdb.Close()
 }
 
-// SolveKey derives the cache key from the full request plus a fingerprint of
-// the prices it was solved against.
+// SolveKey derives the cache key from the fully-built request.
 //
-// TWO INGREDIENTS, and I need both:
+// ONE INGREDIENT: the MARSHALED SolveRequest. I hash the serialized protobuf
+// rather than hand-picking fields, because hand-picking is exactly how cache
+// bugs get written: I add a solver option in three months, forget to add it to
+// the key, and silently serve an answer computed under the old option. If it
+// can change the answer it's in the request, and if it's in the request it's in
+// the hash. The compiler can't enforce that, but this design makes forgetting
+// impossible rather than merely unlikely.
 //
-//  1. The MARSHALED SolveRequest. I hash the serialized protobuf rather than
-//     hand-picking fields, because hand-picking is exactly how cache bugs get
-//     written: I add a solver option in three months, forget to add it to the
-//     key, and silently serve an answer computed under the old option. If it
-//     can change the answer it's in the request, and if it's in the request
-//     it's in the hash. The compiler can't enforce that, but this design makes
-//     forgetting impossible rather than merely unlikely.
-//
-//  2. A PRICES FINGERPRINT. Prices live in the request too, so strictly this is
-//     redundant today — but it becomes essential in Phase 5, when an ingestion
-//     run can change prices between two otherwise-identical requests. Building
-//     it now means the key format doesn't change when that lands.
+// There is no separate prices fingerprint. One was kept here on the theory
+// that it would become necessary once ingestion could change prices between
+// two otherwise-identical requests. That day arrived and it still wasn't:
+// ListSolveCandidates filters to available, priced, non-zero-weight rows in
+// SQL, and BuildRequest copies each survivor's id and effective price into the
+// request — so a price move changes the request, and therefore the blob, and
+// therefore the key. The fingerprint hashed the same numbers a second time.
 //
 // One caveat I should be honest about: proto serialization is not guaranteed
 // deterministic across library versions (map ordering, unknown fields). For a
 // cache that's acceptable — the worst case is a spurious miss, which costs
 // 200ms. I would NOT rely on this for anything where a false miss mattered.
-func SolveKey(req *solverv1.SolveRequest, products []store.Product) (string, error) {
+func SolveKey(req *solverv1.SolveRequest) (string, error) {
 	blob, err := proto.Marshal(req)
 	if err != nil {
 		return "", fmt.Errorf("marshaling request for cache key: %w", err)
 	}
 
-	h := sha256.New()
-	h.Write(blob)
-	h.Write([]byte(pricesFingerprint(products)))
-
-	return "solve:" + hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// pricesFingerprint is a stable digest of (product_id, effective_price,
-// available) across the catalog.
-//
-// SORTED, because Postgres makes no ordering promise I haven't asked for, and
-// two identical catalogs returned in different row orders must produce the same
-// fingerprint. An unsorted fingerprint would give me random cache misses that
-// look like a Redis problem and are actually a determinism problem.
-func pricesFingerprint(products []store.Product) string {
-	parts := make([]string, 0, len(products))
-	for _, p := range products {
-		parts = append(parts, fmt.Sprintf("%d:%d:%t", p.ID, p.EffectivePriceCents, p.Available))
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, ",")
+	sum := sha256.Sum256(blob)
+	return "solve:" + hex.EncodeToString(sum[:]), nil
 }
 
 // Get returns a cached response, or nil for a miss.
